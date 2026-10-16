@@ -1017,6 +1017,8 @@ extern volatile int gPortUnlockAll, gPortUnlockDone;
 extern "C" int Port_GameSpeed(void);          // plat_stub.c: the player's own game speed, percent; never used online
 extern "C" void Port_GameSpeedSet(int percent);
 extern "C" void Port_AudioRefresh(void);
+extern "C" int Port_PowerTime(void);  // plat_stub.c: Mod "Ultra Instinct" v56
+extern "C" void Port_PowerTimeSet(int on);
 
 static void cheats_tab(void) {
     {
@@ -1032,6 +1034,14 @@ static void cheats_tab(void) {
         if (ImGui::Button("Reset")) {
             Port_GameSpeedSet(100);
             Port_AudioRefresh();
+        }
+        {
+            bool power = Port_PowerTime() != 0;
+            if (ImGui::Checkbox("Slower time for stronger fighters", &power)) {
+                Port_PowerTimeSet(power ? 1 : 0);
+            }
+            ImGui::SetItemTooltip("The stronger fighter's power level slows the game down: 100%% at the weakest,\n"
+                                  "50%% at the strongest. Never in online play.");
         }
         ImGui::Separator();
         ImGui::Spacing();

@@ -1373,6 +1373,76 @@ s32 BtlAct_FastDescendHandler(BtlActDChr *chr, s32 phase) {
 extern f32 BtlMoveParam_GetTurnAccel(BtlActDChr *chr, s32 axis); /* steering acceleration, table +0x80[axis] in degrees */
 extern f32 BtlMoveParam_GetTurnMax(BtlActDChr *chr, s32 axis); /* steering speed limit */
 
+#ifdef PORT
+extern f32 Port_ModValue(const char *key, f32 def);  /* Mod "Ultra Instinct" v56 */
+#endif
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: during the homing dash (0x19), L2 + triangle strikes with a rush finisher: no direction
+   dash_strike_neutral (heavy finish 0x60), up dash_strike_up (lift strike 0x5E), down dash_strike_down (ground slash
+   0x5F), left dash_strike_left (rolling hammer 0x64 / 0x65), right dash_strike_right (rush ki wave 0x66). The actions are
+   the game's rush finishers 0x5E..0x66 (0x64 / 0x65 alternate); 0 = the game's own L2 + triangle. A character
+   without the finisher's motion strikes with the heavy finish. Holding triangle charges it, as after a rush. */
+extern s32 BtlInput_IsHeldNotPrev(BtlActDChr *chr, u32 mask);
+extern void BtlColl_AddActionBit(BtlActDChr *chr, s32 action);
+extern void BtlAct_SetQueue(BtlActDChr *chr, s32 slot, s32 action);
+extern s32 BtlObjAnim_HasMotion(void *obj, s32 anim);
+extern f32 Port_ModValue(const char *key, f32 def);
+
+static s32 BtlAct_FinisherMotion(s32 act) {
+    switch (act) {
+    case 0x5E: return 0x41;
+    case 0x5F: return 0x44;
+    case 0x60: return 0x47;
+    case 0x61:
+    case 0x62: return 0x90;
+    case 0x63: return 0x93;
+    case 0x64: return 0x56;
+    case 0x65: return 0x59;
+    case 0x66: return 0x199;
+    }
+    return -1;
+}
+
+static s32 BtlAct_DashStrike(BtlActDChr *chr) {
+    static const char *const key[5] = { "dash_strike_neutral", "dash_strike_up", "dash_strike_down", "dash_strike_left",
+                                        "dash_strike_right" };
+    static const f32 def[5] = { 96.0f, 94.0f, 95.0f, 100.0f, 102.0f };  /* 0x60, 0x5E, 0x5F, 0x64, 0x66 */
+    s32 dir = 0;
+    s32 act;
+
+    if (!BtlInput_IsHeld(chr, 0x200) || !BtlInput_IsHeldNotPrev(chr, 0x4)) {  /* L2 held, triangle pressed */
+        return 0;
+    }
+    if (BtlInput_IsHeld(chr, 0x10)) {
+        dir = 1;
+    } else if (BtlInput_IsHeld(chr, 0x20)) {
+        dir = 2;
+    } else if (BtlInput_IsHeld(chr, 0x40)) {
+        dir = 3;
+    } else if (BtlInput_IsHeld(chr, 0x80)) {
+        dir = 4;
+    }
+    act = (s32)Port_ModValue(key[dir], def[dir]);
+    if (act < 0x5E || act > 0x66) {
+        return 0;
+    }
+    if (act == 0x64 || act == 0x65) {
+        act = BtlChar_TestFlag(chr, 0x8F) ? 0x64 : 0x65;
+    }
+    if (!BtlObjAnim_HasMotion(BtlChar_GetObj(chr), BtlAct_FinisherMotion(act))) {
+        act = 0x60;
+    }
+    BtlColl_AddActionBit(chr, act);
+    BtlAct_SetQueue(chr, 0, act);
+    {
+        extern s32 gBtlDashStrikeChase[2];
+
+        gBtlDashStrikeChase[*(s32 *)chr & 1] = 4;  /* it keeps chasing the opponent (btl_char_action.c); 4: frames of grace */
+    }
+    return 1;
+}
+#endif
+
 /* Action 0x19: ki-draining dash that homes on the opponent (motions 0x18 / 0x2D start, 0x19 loop, 0x1A / 0x15 stop). */
 s32 BtlAct_HomingDashHandler(BtlActDChr *chr, s32 phase) {
     s32 *slowFrames = &chr->work[2];
@@ -1425,6 +1495,11 @@ s32 BtlAct_HomingDashHandler(BtlActDChr *chr, s32 phase) {
                     break;
             }
         }
+#ifdef PORT
+        if ((motion == 0x18 || motion == 0x2D) && Port_ModValue("dash_instant_start", 1.0f) != 0.0f) {
+            motion = 0x19;  /* no start-up motion: moving at once */
+        }
+#endif
         BtlAnim_Play(chr, motion, 0.15f);
         if (voice >= 0) {
             BtlChar_PlayVoice(chr, voice);
@@ -1509,6 +1584,12 @@ s32 BtlAct_HomingDashHandler(BtlActDChr *chr, s32 phase) {
         BtlMove_RequestOrbit(chr, 50.0f, 100.0f);
         BtlChar_SetFxBit(chr, 0x3A);
     }
+#ifdef PORT
+    if (phase == PHASE_DECIDE && BtlAct_DashStrike(chr)) {
+        BtlAct_Request(chr, BtlAct_GetQueued(chr));
+        return 0;
+    }
+#endif
     if (phase == PHASE_DECIDE) {
         switch (BtlAnim_GetId(chr)) {
             case 0x18:
@@ -1517,6 +1598,11 @@ s32 BtlAct_HomingDashHandler(BtlActDChr *chr, s32 phase) {
             case 0x19: {
                 s32 stop = 0;
 
+#ifdef PORT
+                if (BtlMove_IsBlockedByOpponent(chr) && Port_ModValue("dash_keep_going", 1.0f) != 0.0f) {
+                    *slowFrames = 0;  /* at the opponent: the dash goes on (attack out of it, or end it) */
+                } else
+#endif
                 if (BtlMove_IsBlockedByOpponent(chr)) {
                     if (BtlOpp_GetSeenAction(chr) != 0xD5) {
                         stop = 1;
@@ -1529,7 +1615,11 @@ s32 BtlAct_HomingDashHandler(BtlActDChr *chr, s32 phase) {
                 } else {
                     *slowFrames = 0;
                 }
+#ifdef PORT
+                if (!BtlChar_TestFlag(chr, 5) && Port_ModValue("dash_always_homing", 1.0f) == 0.0f) {
+#else
                 if (!BtlChar_TestFlag(chr, 5)) {
+#endif
                     stop = 1;
                 }
                 if (BtlMember_SpendKi(chr, BtlMoveParam_GetKiCost(chr, 0), 0)) {

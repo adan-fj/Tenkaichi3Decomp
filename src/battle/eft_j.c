@@ -1286,6 +1286,10 @@ void EftBlast_Init(EftJTask *task, EftJSrc *arg) {
     BtlTask_SetOwnerTag(task, src->objId == 0 ? 0x800 : 0x1000);
 }
 
+#ifdef PORT
+extern s32 gEftBurstCtx;  /* Mod "Ultra Instinct" v56 (eft_k.c) */
+#endif
+
 /* Term callback of an item. */
 void EftBlast_Term(EftJTask *task) {
     EftBlast *w = task->work;
@@ -1307,6 +1311,9 @@ void EftBlast_Update(EftJTask *task) {
     if (BtlScene_IsCharStopped(src->objId)) {
         return;
     }
+#ifdef PORT
+    gEftBurstCtx = src->unk4 == 5 ? src->objId : -1;  /* Mod "Ultra Instinct" v56: Kaioken's burst: its own events */
+#endif
     if (src->def->unk4 == 0) {
         EftShot_PlayFireSound(src->objId, src);
     }
@@ -1429,6 +1436,9 @@ void EftBlast_Update(EftJTask *task) {
             EftBlast_AddHit(task);
         }
     }
+#ifdef PORT
+    gEftBurstCtx = -1;
+#endif
 }
 
 /* Post-update callback of an item: reacts to what the hit pass reported and follows the corrected head. */

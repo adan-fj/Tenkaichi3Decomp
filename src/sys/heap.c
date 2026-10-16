@@ -239,13 +239,37 @@ void Heap_Init(void) {
     Heap_Create();
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: set while a fighter's file asks for its buffer (btl_obj.c): the port's large blocks first. */
+s32 gPortPreferBig;
+#endif
+
 void *Heap_Alloc(s32 size, u32 align, s32 fromTail, s32 heap) {
-    HeapBlock *block = Heap_AllocBlock(size, align, fromTail, heap);
+    HeapBlock *block;
     void *data = NULL;
+
+#ifdef PORT
+    if (gPortPreferBig && size > 0) {
+        extern unsigned Port_GameBigAlloc(int size);
+
+        data = (void *)Port_GameBigAlloc(size);
+        if (data != NULL) {
+            return data;
+        }
+    }
+#endif
+    block = Heap_AllocBlock(size, align, fromTail, heap);
 
     if (block != NULL) {
         data = (void *)block->data;
     }
+#ifdef PORT
+    if (data == NULL && size > 0) {
+        extern unsigned Port_GameBigAlloc(int size);
+
+        data = (void *)Port_GameBigAlloc(size);  /* Mod "Ultra Instinct" v56: no console limit (Heap_Free gives it back) */
+    }
+#endif
     return data;
 }
 

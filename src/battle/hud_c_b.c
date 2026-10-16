@@ -631,10 +631,70 @@ void HudCombo_SetMessage(s32 side, s32 message) {
     gHudCombo->msg[side] = message;
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: banners of the mod in the technique name line: text[side] = 0x40000000 | kind << 16 | value, kind 1
+   "Kaio-ken x<value>" (BtlAct_KaiokenBanner), 2 / 3 Ultra Instinct on / off, 4 / 5 Super Speed on / off
+   (BtlAct_ToggleMode), 6..8 the god forms, 9 "Not enough stamina" (a transformation refused for its cost), 10 Super
+   Saiyan 4 Limit Breaker. Otherwise
+   text[side] is an entry of the skill script, as always. */
+extern s32 BtlAct_KaiokenBanner(s32 side);
+extern void BtlText_DrawString(s32 x, s32 y, u16 *str, s32 align, f32 alpha);
+static const char *const sHudModeText[11] = {
+    "", "Kaio-ken x", "Ultra Instinct", "Ultra Instinct off", "Super Speed", "Super Speed off",
+    "Super Saiyan God", "Super Saiyan God Super Saiyan", "Super Saiyan Rose", "Not enough stamina",
+    "Super Saiyan 4 Limit Breaker"
+};
+
+void HudCombo_ShowModeText(s32 side, s32 kind, s32 value) {
+    if (side < 0 || side > 1 || gHudCombo == NULL) {
+        return;
+    }
+    gHudCombo->textState[side] = 0;
+    gHudCombo->text[side] = 0x40000000 | (kind << 16) | (value & 0xFFFF);
+}
+
+static void HudCombo_DrawModeText(s32 x, s32 y, s32 code, s32 align, f32 alpha) {
+    u16 buf[40];
+    s32 digits[6];
+    const char *p;
+    s32 kind = (code >> 16) & 0xFF;
+    s32 value = code & 0xFFFF;
+    s32 n = 0;
+    s32 d = 0;
+
+    if (kind < 1 || kind > 10) {
+        return;
+    }
+    for (p = sHudModeText[kind]; *p != '\0' && n < 30; p++) {
+        buf[n++] = (u16)(u8)*p;
+    }
+    if (kind == 1) {
+        do {
+            digits[d++] = value % 10;
+            value /= 10;
+        } while (value > 0 && d < 6);
+        while (d > 0) {
+            buf[n++] = (u16)('0' + digits[--d]);
+        }
+    }
+    buf[n] = 0;
+    BtlText_DrawString(x, y, buf, align, alpha);
+}
+#endif
+
 /* Starts the text line on a side: the name of entry `text` of the fighter's skill script. */
 void HudCombo_SetText(s32 side, s32 text) {
     gHudCombo->textState[side] = 0;
     gHudCombo->text[side] = text;
+#ifdef PORT
+    {
+        s32 mult = BtlAct_KaiokenBanner(side);
+
+        if (mult > 0) {
+            gHudCombo->text[side] = 0x40000000 | (1 << 16) | (mult & 0xFFFF);
+        }
+    }
+#endif
 }
 
 /* Gives the side's combo damage; negative: slide the number out. The number counts from where the last count
@@ -733,6 +793,11 @@ void HudCombo_DrawText(void) {
             Port_GsMarker(HUD_SCR(side) ? PORT_2D_RIGHT : PORT_2D_LEFT);
 #endif
             BtlMenu_SetScript2(BtlCtrl_GetObj(side)->skillScript);
+#ifdef PORT
+            if (gHudCombo->text[side] & 0x40000000) {
+                HudCombo_DrawModeText(pos[0], pos[1], gHudCombo->text[side], HUD_SCR(side), alpha);
+            } else
+#endif
             BtlText_DrawEntryName(pos[0], pos[1], gHudCombo->text[side], HUD_SCR(side), alpha); /* (the 4th: left or right aligned) */
         }
     }

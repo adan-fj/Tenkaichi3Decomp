@@ -323,6 +323,15 @@ s32 BtlHit_CheckNear(HitChr *a, HitChr *b) {
     if (150.0f < range) {
         range = 150.0f;
     }
+#ifdef PORT
+    {
+        extern s32 BtlHit_UltraInstinctNear(HitChr *a, HitChr *b, f32 range);
+
+        if (BtlHit_UltraInstinctNear(a, b, range)) {  /* Mod "Ultra Instinct" v56: out of the push */
+            return 0;
+        }
+    }
+#endif
     BtlCharApi_GetNodePos(a->objId, 3, &pa);
     BtlCharApi_GetNodePos(b->objId, 3, &pb);
     Vec4_Sub(&d, &pa, &pb);
@@ -487,6 +496,97 @@ s32 BtlHit_IsVoid(HitChr *atk, HitChr *def) {
     return 0;
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: a member with ability 0x7E (the Ultra Instinct capsule) dodges every hit it can pay 2 stamina for
+   (BtlMember_PayStamina); see BtlHit_CheckDodge. */
+#ifndef BTL_ABILITY_ULTRA_INSTINCT
+#define BTL_ABILITY_ULTRA_INSTINCT 0x7E
+#define BTL_ULTRA_INSTINCT_STAMINA BtlMember_UltraInstinctStamina(chr, 0)
+extern f32 Port_ModValue(const char *key, f32 def);
+extern s32 BtlMember_UltraInstinctStamina(void *chr, s32 activate);
+#endif
+extern s32 BtlObjAnim_HasMotion(HitObj *obj, s32 anim);
+extern void BtlAct_UltraInstinctSlide(void *def, void *atk);
+extern s32 BtlMember_PayStamina(HitChr *chr, s32 points);
+
+static s32 BtlHit_PayUltraInstinct(HitChr *chr) {
+    if (BtlChar_TestFlag(chr, 0x74) || BtlChar_TestFlag(chr, 0x75) || BtlChar_TestFlag(chr, 0x76) ||
+        BtlChar_TestFlag(chr, 0x7D)) {
+        return 1;
+    }
+    return BtlMember_PayStamina(chr, BTL_ULTRA_INSTINCT_STAMINA);
+}
+
+/* Whether a dodge can be shown: a neutral motion (flags 0xB1), or already a dodge (step 0x1B..0x1D, sway 0x41). */
+static s32 BtlHit_PayUltraInstinctShown(HitChr *chr, s32 neutral) {
+    s32 cur = BtlAct_GetCurrent(chr);
+
+    return neutral || (cur >= 0x1B && cur <= 0x1D) || cur == 0x41;
+}
+
+/* The opponent's push burst (attacker flags 0x4A / 0x4B, BtlHit_CheckNear: the burst of a full charge, explosive
+   wave skills): within `range` of it, an Ultra Instinct fighter is put outside, range x ultra_instinct_burst_scale
+   + ultra_instinct_wave_margin from the attacker, level with where it stands, and is not pushed (flag 0x42). */
+extern void BtlAct_UltraInstinctFace(void *chr);
+
+s32 BtlHit_UltraInstinctNear(HitChr *a, HitChr *b, f32 range) {
+    Vec4 d;
+    Vec4 *pos;
+    Vec4 *from;
+    f32 len;
+    f32 out;
+
+    if (!BtlMember_HasAbility(b, BTL_ABILITY_ULTRA_INSTINCT) || Port_ModValue("ultra_instinct_escape_waves", 1.0f) == 0.0f) {
+        return 0;
+    }
+    pos = &BtlChar_GetPos(b)->pos;
+    from = &BtlChar_GetPos(a)->pos;
+    Vec4_Sub(&d, pos, from);
+    len = BtlUtil_LengthXZ(&d);
+    out = range * Port_ModValue("ultra_instinct_burst_scale", 1.0f) + Port_ModValue("ultra_instinct_wave_margin", 25.0f);
+    if (len >= out) {
+        return 0;
+    }
+    if (len < 0.01f) {
+        d.x = 0.0f;
+        d.z = 1.0f;
+        len = 1.0f;
+    }
+    pos->x = from->x + d.x * out / len;
+    pos->z = from->z + d.z * out / len;
+    BtlChar_SetFlag(b, 0x42);
+    BtlAct_UltraInstinctFace(b);
+    return 1;
+}
+
+/* The dodge of a melee hit: a sway step (flag 0x7D) when the fighter has the sway motions, else a step back. */
+static void BtlHit_UltraInstinctMeleeDodge(HitChr *def) {
+    if (BtlObjAnim_HasMotion(BtlChar_GetObj(def), 0x193) && BtlObjAnim_HasMotion(BtlChar_GetObj(def), 0x194) &&
+        BtlObjAnim_HasMotion(BtlChar_GetObj(def), 0x195)) {
+        BtlChar_SetFlag(def, 0x7D);
+    } else {
+        BtlChar_SetFlag(def, 0x76);
+    }
+}
+
+/* Melee: one sway step (flag 0x7D, action 0x41) per hit when the defender has the sway motions, else a step back
+   (flag 0x76; never a side step). A busy defender (attacking) is just not hit. The attacker carries on as if the
+   hit had landed (held flag 0x5B: its follow-ups and strike abilities stay open) and is kept in front of the
+   dodging defender (btl_char_action.c). */
+static s32 BtlHit_UltraInstinct(HitChr *atk, HitChr *def, s32 neutral) {
+    if (!BtlMember_HasAbility(def, BTL_ABILITY_ULTRA_INSTINCT) || !BtlHit_PayUltraInstinct(def)) {
+        return 0;
+    }
+    BtlChar_SetHeldFlag(atk, 0x5B);
+    if (BtlHit_PayUltraInstinctShown(def, neutral)) {
+        BtlHit_UltraInstinctMeleeDodge(def);
+    } else {
+        BtlAct_UltraInstinctSlide(def, atk);  /* busy: aside, the attack going on */
+    }
+    return 1;
+}
+#endif
+
 /* Automatic evasion. With the defender free, not flagged 0x5A and in an animation with flags 0xB1 (or flag 0x200000
  * with the hit counter condition / flag 0x60): the attack is avoided when the defender's level (+0x1068) beats the
  * attack and it is its first hit, or a counter at +0xE00 / +0xE04 is left (one is used up), or flags 0x56 / 0x57 are
@@ -526,6 +626,11 @@ s32 BtlHit_CheckDodge(HitChr *atk, HitChr *def) {
             on = 1;
         }
     }
+#ifdef PORT
+    if (BtlHit_UltraInstinct(atk, def, on)) {
+        return 1;
+    }
+#endif
     if (on) {
         flags = BtlAtk_GetFlags(atk);
         done = 0;
@@ -910,6 +1015,16 @@ s32 BtlHit_CheckRush(void) {
             BtlChar_SetFlag(a, 0x129);
             continue;
         }
+#ifdef PORT
+        if (BtlChar_IsFree(b) && !BtlChar_TestFlag(b, 0x5A) && BtlMember_HasAbility(b, BTL_ABILITY_ULTRA_INSTINCT) &&
+            BtlHit_PayUltraInstinct(b)) {
+            BtlChar_SetFlag(a, 0x63);
+            if (BtlHit_PayUltraInstinctShown(b, (st & 0xB1) != 0)) {
+                BtlHit_UltraInstinctMeleeDodge(b);
+            }
+            continue;
+        }
+#endif
         if (BtlChar_IsFree(b) && b->unk107C > 0) {
             if (BtlChar_TestFlag(a, 0xA5)) {
                 if ((st & 0x31) && !BtlHit_IsFromBehind(a, b)) {

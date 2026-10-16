@@ -237,6 +237,14 @@ f32 BtlKiBlast_ScaleSpeedByAbility(BtlTechBChr *chr, s32 kind, f32 speed) {
         }
         break;
     }
+#ifdef PORT
+    /* Mod "Ultra Instinct" v56: Ultra Instinct ki blasts fly faster */
+    if (chr != NULL && BtlMember_HasAbility(chr, 0x7E)) {
+        extern f32 Port_ModValue(const char *key, f32 def);
+
+        speed *= Port_ModValue("ultra_instinct_blast_speed", 1.8f);
+    }
+#endif
     return speed;
 }
 
@@ -887,6 +895,11 @@ f32 BtlKiBlast_GetGuardPushOf(BtlTechBChr *chr, u32 kind) {
 /* ---- movement (obj + 0x928) ---------------------------------------------------------------------------------- */
 
 /* Movement speed n per frame: table value in 10 km/h, x pose +0xAC for n 4 and 5, x curve row 8 except n 15 and 19, at most 4000 km/h. */
+#ifdef PORT
+extern f32 BtlAct_KaiokenSpeed(BtlTechBChr *chr);
+extern s32 BtlMember_StaminaUnits(BtlTechBChr *chr, s32 points);
+extern f32 Port_ModValue(const char *key, f32 def);
+#endif
 f32 BtlMoveParam_GetSpeed(BtlTechBChr *chr, s32 n) {
     f32 v = BtlChar_GetObj(chr)->move->speed[n] * 10.0f * BTL_KMH_PER_FRAME;
 
@@ -903,6 +916,9 @@ f32 BtlMoveParam_GetSpeed(BtlTechBChr *chr, s32 n) {
         v *= BtlStat_GetSpeedScale(chr);
         break;
     }
+#ifdef PORT
+    v *= BtlAct_KaiokenSpeed(chr);  /* Mod "Ultra Instinct" v56: Kaioken is faster */
+#endif
     if (BTL_KMH(4000.0f) < v) {
         v = BTL_KMH(4000.0f);
     }
@@ -1195,12 +1211,43 @@ s32 BtlSuper_GetCooldownFrames(BtlTechBChr *chr, s32 slot) {
 
 /* Table +0x1CC (seconds) in frames: how long the charge type can be held. */
 s32 BtlSuper_GetChargeLimitFrames(BtlTechBChr *chr, s32 slot) {
+#ifdef PORT
+    {
+        extern f32 Port_ModValue(const char *key, f32 def);
+        f32 t = BtlChar_GetObj(chr)->super->chargeLimit[slot - 2];
+
+        if (t < 0.0f) {
+            t = -t;
+        }
+        if (t == 0.0f) {
+            t = Port_ModValue("charge_default_seconds", 2.0f);
+        }
+        return t * 30.0f;
+    }
+#else
     return BtlChar_GetObj(chr)->super->chargeLimit[slot - 2] * 30.0f;
+#endif
 }
 
 /* Damage multiplier of a fully charged technique. */
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: whether technique `slot` charges while its button is held (techniques.csv). */
+s32 BtlSuper_IsHoldChargeable(BtlTechBChr *chr, s32 slot) {
+    return BtlChar_GetObj(chr)->super->chargeLimit[slot - 2] >= 0.0f;
+}
+
+#endif
 f32 BtlSuper_GetChargeScale(BtlTechBChr *chr, s32 slot) {
+#ifdef PORT
+    {
+        extern f32 Port_ModValue(const char *key, f32 def);
+        f32 v = BtlChar_GetObj(chr)->super->chargeScale[slot - 2];
+
+        return v > 0.0f ? v : Port_ModValue("charge_default_full_damage", 1.5f);
+    }
+#else
     return BtlChar_GetObj(chr)->super->chargeScale[slot - 2];
+#endif
 }
 
 /* Table +0x1E4 (degrees) in radians; throw description +0x60. */
@@ -1588,6 +1635,11 @@ s32 BtlSkill_GetGuardDamage(BtlTechBChr *chr, s32 slot, s32 total) {
 s32 BtlSkill_GetBlastCost(BtlTechBChr *chr, s32 slot) {
     s32 n = BtlChar_GetObj(chr)->skill->stocks[slot];
 
+#ifdef PORT
+    if (BtlChar_GetObj(chr)->skill->id[slot] == 0x18) {
+        return BtlMember_StaminaUnits(chr, (s32)Port_ModValue("kaioken_stamina", 5.0f));  /* Kaioken */
+    }
+#endif
     if (BtlMember_HasAbility(chr, 0x15)) {
         n--;
     }

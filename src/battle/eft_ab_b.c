@@ -256,6 +256,13 @@ void EftTransform_Init(EftAbTask *task, EftTransformArg *req) {
     w->flags |= EFT_TF_ALIVE;
     w->endFrames = EftEmit_GetEndFrames(w->set);
     gEftTransform->busy = 1;
+#ifdef PORT
+    {
+        extern void BtlGod_TransformColors(s32 objId, s32 kind, s32 on);
+
+        BtlGod_TransformColors(arg->objId, arg->kind, 1);  /* Mod "Ultra Instinct" v56 */
+    }
+#endif
 }
 
 /* Term callback: undoes the tint and the hidden fighter if the task dies between flash and reveal. */
@@ -273,6 +280,13 @@ void EftTransform_Term(EftAbTask *task) {
     }
     EftStage_SetDrawOn(1);
     EftEmit_TermState(w->set, w->state);
+#ifdef PORT
+    {
+        extern void BtlGod_TransformColors(s32 objId, s32 kind, s32 on);
+
+        BtlGod_TransformColors(arg->objId, arg->kind, 0);  /* Mod "Ultra Instinct" v56: the colours back */
+    }
+#endif
     if (!(w->flags & EFT_TF_DETACHED)) {
         gEftTransform->task = NULL;
         gEftTransform->busy = 0;

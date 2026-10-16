@@ -1147,6 +1147,19 @@ s32 BtlRes_FreeFile(BtlResFile *file) {
     return freed;
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: file_buffer_exact: a fighter's files (its slot's and the spare model record) each in a buffer of its
+   own size, taken when the file is asked for (the old one given back first), instead of the fixed buffers. */
+static s32 sBtlResExact;
+
+static s32 BtlRes_IsFighterFile(BtlResFile *file) {
+    BtlResWork *res = BtlRes_GetWork();
+
+    return sBtlResExact && ((u8 *)file >= (u8 *)res->fixed && (u8 *)file < (u8 *)(res->fixed + BTL_RES_FIXED_MAX) ||
+                            (u8 *)file >= (u8 *)res->spare && (u8 *)file < (u8 *)(res->spare + 3));
+}
+#endif
+
 /* Queues the read of a file: into a new heap buffer (fromHeap == 1) or into the record's own buffer. */
 void BtlRes_LoadFile(BtlResFile *file, s32 fromHeap) {
     if (fromHeap == 1) {
@@ -1156,6 +1169,21 @@ void BtlRes_LoadFile(BtlResFile *file, s32 fromHeap) {
         }
     } else {
         if (file->id >= 0) {
+#ifdef PORT
+            if (BtlRes_IsFighterFile(file)) {
+                extern s32 gPortPreferBig;
+                extern void File_DisownBuffer(void *buf);
+
+                if (file->buf != NULL) {
+                    Heap_Free(file->buf);  /* the file it held is replaced */
+                }
+                gPortPreferBig = 1;
+                file->buf = File_Request3(file->id, NULL, 0);  /* its exact size */
+                gPortPreferBig = 0;
+                File_DisownBuffer(file->buf);  /* the slot's, freed by it */
+                return;
+            }
+#endif
             file->buf = File_Request3(file->id, file->buf, file->size);
         }
     }
@@ -1171,6 +1199,27 @@ void BtlRes_CommitReload(void) {
     }
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: a buffer of a fighter's file, `size` (the console's) times file_buffer_scale, from the port's
+   large blocks (outside the console's heap; Heap_Free gives it back); the heap's, at the console's size, when
+   there are none (the 32-bit program). */
+static void *BtlRes_FileBuffer(s32 size) {
+    extern unsigned Port_GameBigAlloc(int size);
+    extern f32 Port_ModValue(const char *key, f32 def);
+    f32 scale = Port_ModValue("file_buffer_scale", 4.0f);
+    void *p;
+
+    if (Port_ModValue("file_buffer_exact", 1.0f) != 0.0f) {
+        return NULL;  /* each file gets a buffer of its own size when it is read (BtlRes_LoadFile) */
+    }
+    if (scale < 1.0f) {
+        scale = 1.0f;
+    }
+    p = (void *)Port_GameBigAlloc((s32)((f32)size * scale));
+    return p != NULL ? p : Heap_Alloc(size, 0x40, 0, HEAP_ANY);
+}
+#endif
+
 /* Clears the slots; with prealloc, allocates the buffers of the two fixed slots and the spare model buffer. */
 void BtlRes_Init(s32 prealloc) {
     BtlResWork *res = BtlRes_GetWork();
@@ -1181,25 +1230,62 @@ void BtlRes_Init(s32 prealloc) {
 
     memset(res, 0, sizeof(BtlResWork));
     res->prealloc = prealloc;
+#ifdef PORT
+    {
+        extern f32 Port_ModValue(const char *key, f32 def);
+        extern void Port_ModMemLog(s32 heapFree);
+        extern s32 Heap_GetFreeSize(void);
+
+        sBtlResExact = prealloc != 0 && Port_ModValue("file_buffer_exact", 1.0f) != 0.0f;  /* Mod "Ultra Instinct" v56 */
+        Port_ModMemLog(Heap_GetFreeSize());
+    }
+#endif
     if (prealloc != 0) {
         for (i = 0; i < 3; i++) {
+#ifdef PORT
+            res->spare[i].buf = BtlRes_FileBuffer(BTL_RES_MODEL_SIZE);
+#else
             res->spare[i].buf = Heap_Alloc(BTL_RES_MODEL_SIZE, 0x40, 0, HEAP_ANY);
+#endif
             res->spare[i].size = 0;
             res->spare[i].id = -1;
             res->spare[i].orig = res->spare[i].buf;
+#ifdef PORT
+            if (res->spare[i].buf != NULL) {
+                memset(res->spare[i].buf, 0, BTL_RES_MODEL_SIZE);
+            }
+#else
             memset(res->spare[i].buf, 0, BTL_RES_MODEL_SIZE);
+#endif
         }
         for (i = 0; i < BTL_RES_FIXED_MAX; i++) {
             slot = &res->fixed[i];
             spare = &res->spare[i];
+#ifdef PORT
+            slot->file[1].buf = BtlRes_FileBuffer(BTL_RES_ANIM0_SIZE);
+#else
             slot->file[1].buf = Heap_Alloc(BTL_RES_ANIM0_SIZE, 0x40, 0, HEAP_ANY);
+#endif
             slot->file[1].size = 0;
             slot->file[1].id = -1;
+#ifdef PORT
+            slot->file[2].buf = BtlRes_FileBuffer(BTL_RES_ANIM1_SIZE);
+#else
             slot->file[2].buf = Heap_Alloc(BTL_RES_ANIM1_SIZE, 0x40, 0, HEAP_ANY);
+#endif
             slot->file[2].size = 0;
             slot->file[2].id = -1;
+#ifdef PORT
+            if (slot->file[1].buf != NULL) {
+                memset(slot->file[1].buf, 0, BTL_RES_ANIM0_SIZE);
+            }
+            if (slot->file[2].buf != NULL) {
+                memset(slot->file[2].buf, 0, BTL_RES_ANIM1_SIZE);
+            }
+#else
             memset(slot->file[1].buf, 0, BTL_RES_ANIM0_SIZE);
             memset(slot->file[2].buf, 0, BTL_RES_ANIM1_SIZE);
+#endif
             BtlRes_CopyFile(&slot->file[0], spare);
             slot->number = number++;
         }
@@ -1236,6 +1322,21 @@ void BtlRes_Term(void) {
             Heap_Free(res->spare[i].orig);
         }
     }
+#ifdef PORT
+    if (sBtlResExact) {
+        for (i = 0; i < BTL_RES_FIXED_MAX; i++) {
+            if (res->fixed[i].file[0].buf != NULL) {
+                Heap_Free(res->fixed[i].file[0].buf);
+            }
+        }
+        for (i = 0; i < 3; i++) {
+            if (res->spare[i].buf != NULL && res->spare[i].orig == NULL) {
+                Heap_Free(res->spare[i].buf);
+            }
+        }
+        sBtlResExact = 0;
+    }
+#endif
 }
 
 /* Takes a slot and queues its files; returns the slot number or -1. */

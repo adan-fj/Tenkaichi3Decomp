@@ -351,6 +351,19 @@ void *File_Request(s32 id, void *buf) {
     return buf;
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: the pending request reading into `buf` no longer owns it (its caller frees it). */
+void File_DisownBuffer(void *buf) {
+    FileReq *req;
+
+    for (req = (FileReq *)List_GetHead(&gFileReq.pending); req != NULL; req = (FileReq *)List_GetNext(&req->node)) {
+        if (req->buf == buf) {
+            req->flags &= ~FILE_REQ_OWNS_BUF;
+        }
+    }
+}
+#endif
+
 /* Advances the request queue by one step; returns 1 when every request has been read. */
 s32 File_UpdateRequests(void) {
     FileReqQueue *queue = &gFileReq;

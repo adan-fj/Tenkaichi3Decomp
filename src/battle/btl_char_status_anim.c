@@ -369,6 +369,34 @@ s32 BtlAnim_TestAttr(BtlStatChr *chr, u64 mask) {
     return BtlObjAnim_TestEvent(BtlChar_GetObj(chr), mask);
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: the melee attacks (0x44..0x66, 0x70..0xAD) and ki blasts (0xAE..0xB3) advance more frames per step: the
+   whole attack, hit frames included, is that much faster. Everyone by power level (1x .. 1.35x,
+   BtlMember_AttackSpeed), times 1.75f with ability 0x7E (the Ultra Instinct capsule) or 0x7D (Super Speed),
+   times the speed of Kaioken. */
+#define BTL_ABILITY_ULTRA_INSTINCT 0x7E
+extern s32 BtlMember_HasAbility(BtlStatChr *chr, s32 n);
+extern s32 BtlAct_GetCurrent(BtlStatChr *chr);
+extern f32 BtlAct_KaiokenSpeed(BtlStatChr *chr);
+extern f32 BtlMember_AttackSpeed(BtlStatChr *chr);
+extern f32 Port_ModValue(const char *key, f32 def);
+
+static f32 BtlAnim_UltraInstinctStep(BtlStatChr *chr, f32 step) {
+    s32 act = BtlAct_GetCurrent(chr);
+
+    if (!((act >= 0x44 && act <= 0x66) || (act >= 0x70 && act <= 0xB3))) {
+        return step;
+    }
+    step *= BtlMember_AttackSpeed(chr);
+    if (BtlMember_HasAbility(chr, BTL_ABILITY_ULTRA_INSTINCT)) {
+        step *= Port_ModValue("ultra_instinct_attack_speed", 1.75f);
+    } else if (BtlMember_HasAbility(chr, 0x7D)) {
+        step *= Port_ModValue("super_speed_attack_speed", 1.75f);
+    }
+    return step * BtlAct_KaiokenSpeed(chr);
+}
+#endif
+
 /* Advances the animation one step (flags & 1: not while blending); at the end clamps, holds flag 0x31 and returns 1. */
 s32 BtlAnim_Advance(BtlStatChr *chr, s32 flags) {
     s32 done = 0;
@@ -383,7 +411,11 @@ s32 BtlAnim_Advance(BtlStatChr *chr, s32 flags) {
     }
     a->prevFrame = a->frame;
     if (!(flags & 1) || a->blend == 0.0f) {
+#ifdef PORT
+        a->frame += BtlAnim_UltraInstinctStep(chr, a->step);
+#else
         a->frame += a->step;
+#endif
         if (a->frame >= a->length - 0.1f) {
             BtlChar_SetHeldFlag(chr, BTL_ANIM_FLAG_END);
             done = 1;
@@ -422,7 +454,11 @@ void BtlAnim_AdvanceLoop(BtlStatChr *chr, s32 flags) {
     }
     a->prevFrame = a->frame;
     if (!(flags & 1) || a->blend == 0.0f) {
+#ifdef PORT
+        a->frame += BtlAnim_UltraInstinctStep(chr, a->step);
+#else
         a->frame += a->step;
+#endif
         if (a->frame >= a->length - 0.1f) {
             a->frame = 0.0f;
         }

@@ -144,6 +144,11 @@ s32 BtlColl_StartThrow(BtlCollChr *atk, BtlCollChr *def, s32 slot, u32 techFlags
     s32 back;
     f32 yaw;
 
+#ifdef PORT
+    if (BtlMember_HasAbility(def, 0x7E)) {  /* Mod "Ultra Instinct" v56: Ultra Instinct is never grabbed */
+        return 0;
+    }
+#endif
     if (atk->react.id >= 3) {
         return 0;
     }
@@ -912,6 +917,11 @@ s32 BtlColl_StartRushCatch(BtlCollChr *chr, BtlCollChr *atk, BtlCollHit *hit, s3
     u32 tf;
     s32 alt;
 
+#ifdef PORT
+    if (BtlMember_HasAbility(chr, 0x7E)) {  /* Ultra Instinct is never caught */
+        return 0;
+    }
+#endif
     if (atk->react.id >= 3) {
         return 0;
     }
@@ -1077,6 +1087,120 @@ s32 BtlColl_HitByRush(BtlCollChr *chr, BtlCollHit *hit) {
     return 1;
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: a member with ability 0x7E (the Ultra Instinct capsule) dodges every blast and technique hit it can
+   pay 2 stamina for with a step to the side; a busy one (attacking) is just not hit. Its own hits get random
+   extra impacts (BtlFx_UltraInstinctBurst, btl_char_fx.c). */
+#ifndef BTL_ABILITY_ULTRA_INSTINCT
+#define BTL_ABILITY_ULTRA_INSTINCT 0x7E
+#define BTL_ULTRA_INSTINCT_STAMINA BtlMember_UltraInstinctStamina(chr, 0)
+extern f32 Port_ModValue(const char *key, f32 def);
+extern s32 BtlMember_UltraInstinctStamina(void *chr, s32 activate);
+#endif
+extern s32 BtlMember_PayStamina(BtlCollChr *chr, s32 points);
+extern void BtlFx_UltraInstinctBurst(Vec4 *pos, Vec4 *dir, s32 objId);
+
+static s32 BtlColl_PayUltraInstinct(BtlCollChr *chr) {
+    if (BtlChar_TestFlag(chr, 0x74) || BtlChar_TestFlag(chr, 0x75) || BtlChar_TestFlag(chr, 0x76) ||
+        BtlChar_TestFlag(chr, 0x7D)) {
+        return 1;
+    }
+    return BtlMember_PayStamina(chr, BTL_ULTRA_INSTINCT_STAMINA);
+}
+
+/* Whether a dodge can be shown: a neutral motion (flags 0xB1), or already a dodge (step 0x1B..0x1D, sway 0x41). */
+static s32 BtlColl_PayUltraInstinctShown(BtlCollChr *chr, s32 neutral) {
+    s32 cur = BtlAct_GetCurrent(chr);
+
+    return neutral || (cur >= 0x1B && cur <= 0x1D) || cur == 0x41;
+}
+
+/* An explosive wave (super or not): a technique or skill hit whose sphere is centred on the attacker. The Ultra Instinct
+   fighter is put just outside it, level with where it stands, again on every frame the wave catches up, and nothing
+   of it lands (ultra_instinct_escape_waves). Free of stamina. */
+extern f32 EftHit_GetRadiusA(BtlCollHit *rec);
+extern void BtlAct_UltraInstinctFace(void *chr);
+
+static s32 BtlColl_UltraInstinctWave(BtlCollChr *chr, BtlCollHit *hit) {
+    u8 *shape = (u8 *)hit + 0x70;  /* EftHitRec.shape: type 0 = spheres; +0xC the first sphere (pos, radius) */
+    BtlCollChr *atk;
+    Vec4 *center;
+    Vec4 *pos;
+    Vec4 d;
+    f32 r;
+    f32 len;
+    f32 out;
+
+    if (!BtlMember_HasAbility(chr, BTL_ABILITY_ULTRA_INSTINCT) || hit->owner == NULL || *(s32 *)shape != 0 ||
+        Port_ModValue("ultra_instinct_escape_waves", 1.0f) == 0.0f) {
+        return 0;
+    }
+    center = *(Vec4 **)(shape + 0xC);
+    atk = BtlChar_Get(hit->owner->side);
+    if (center == NULL || atk == NULL) {
+        return 0;
+    }
+    r = EftHit_GetRadiusA(hit);
+    Vec4_Sub(&d, center, &BtlChar_GetPos(atk)->pos);
+    if (r < Port_ModValue("ultra_instinct_wave_min_radius", 20.0f) || Vec3_Length(&d) > r * 0.5f) {
+        return 0;  /* small, or not around the attacker: not a wave */
+    }
+    r *= Port_ModValue("ultra_instinct_wave_scale", 2.0f);  /* the explosion looks bigger than its hit sphere */
+    pos = &BtlChar_GetPos(chr)->pos;
+    Vec4_Sub(&d, pos, center);
+    d.y = 0.0f;
+    len = BtlUtil_LengthXZ(&d);
+    out = r + Port_ModValue("ultra_instinct_wave_margin", 25.0f);
+    if (len >= out) {
+        return 0;  /* already outside */
+    }
+    BtlAct_UltraInstinctFace(chr);  /* facing the attacker (the turn does not move it) */
+    if (len < 0.01f) {
+        d.x = 0.0f;
+        d.z = 1.0f;
+        len = 1.0f;
+    }
+    pos->x = center->x + d.x * out / len;
+    pos->z = center->z + d.z * out / len;
+    BtlChar_SetFlag(chr, 0x42);
+    BtlChar_SetFlag(chr, 0x43);
+    BtlChar_SetFlag(chr, 0x44);
+    BtlChar_SetFlag(chr, 0x45);
+    BtlChar_SetFlag(chr, 0x46);
+    return 1;
+}
+
+/* Every frame (eft_det_a.c, before the hits are tested): an Ultra Instinct fighter gets out of each explosive wave of
+   its opponent's that it is inside, even where the wave's hit sphere does not reach yet. */
+void BtlColl_UltraInstinctWaves(void *list, s32 count) {
+    s32 i;
+
+    for (i = 0; i < count && i < 64; i++) {
+        BtlCollHit *hit = (BtlCollHit *)((u8 *)list + i * 0x190);  /* EftHitRec: +0 the owner's object id */
+        BtlCollChr *chr = BtlChar_FindByObjId(*(s32 *)hit ^ 1);
+
+        if (chr != NULL) {
+            BtlColl_UltraInstinctWave(chr, hit);
+        }
+    }
+}
+
+extern void BtlAct_UltraInstinctSlide(void *def, void *atk);
+
+static s32 BtlColl_UltraInstinct(BtlCollChr *chr, BtlCollChr *atk) {
+    if (!BtlMember_HasAbility(chr, BTL_ABILITY_ULTRA_INSTINCT) || !BtlChar_IsFree(chr) ||
+        !BtlColl_PayUltraInstinct(chr)) {
+        return 0;
+    }
+    if (BtlColl_PayUltraInstinctShown(chr, (BtlAnim_GetFlags(BtlAnim_GetId(chr)) & 0xB1) != 0)) {
+        BtlChar_SetFlag(chr, BtlChar_FrameMod(2) ? 0x74 : 0x75);
+    } else {
+        BtlAct_UltraInstinctSlide(chr, atk);  /* busy: aside, the attack going on */
+    }
+    return 1;
+}
+#endif
+
 /* Asks the fighter whether a hit about to land is avoided: invulnerability, or an automatic dodge. */
 s32 BtlColl_TryDodge(s32 objId, BtlCollHit *hit) {
     BtlCollChr *chr = BtlChar_FindByObjId(objId);
@@ -1111,6 +1235,11 @@ s32 BtlColl_TryDodge(s32 objId, BtlCollHit *hit) {
             }
         }
     }
+#ifdef PORT
+    if (hit->type == BTL_HIT_BLAST && !BtlChar_TestFlag(chr, 0x44) && BtlColl_UltraInstinct(chr, BtlChar_Get(hit->ownerId))) {
+        return 1;
+    }
+#endif
     if (hit->type == BTL_HIT_BLAST) {
         return BtlChar_TestFlag(chr, 0x44) != 0;
     }
@@ -1140,6 +1269,16 @@ s32 BtlColl_TryDodge(s32 objId, BtlCollHit *hit) {
             break;
         }
     }
+#ifdef PORT
+    if (BtlColl_UltraInstinctWave(chr, hit)) {
+        return 1;
+    }
+#endif
+#ifdef PORT
+    if (BtlColl_UltraInstinct(chr, BtlChar_Get(hit->ownerId))) {
+        return 1;
+    }
+#endif
     if (!BtlChar_IsFree(chr)) {
         return 0;
     }

@@ -749,7 +749,11 @@ s32 BtlAct_ChargeHandler(Chr *chr, s32 phase) {
             if (BtlInput_TestAction(chr, 0x13, 0)) {
                 BtlAct_Request(chr, 0xB);
             }
+#ifdef PORT
+            BtlDecide_Main(chr, 0xD01D00);  /* Mod "Ultra Instinct" v56: + the transformations (god forms) */
+#else
             BtlDecide_Main(chr, 0xD01C00);
+#endif
             BtlDecide_Common(chr, 6);
             BtlAct_Request(chr, BtlAct_GetQueued(chr));
         }
@@ -1191,6 +1195,15 @@ s32 BtlAct_Action40(Chr *chr, s32 phase) {
  * action was 0x41) with camera cut 0x11 / 0x12 by the sign of the fighter camera's `side`, then idles (0 / 0x26)
  * until flag 0xB5 or the opponent's seen action is no longer 0x45, and requests 0x6A.
  */
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: an Ultra Instinct sway is one step per hit (see btl_char_hit.c). */
+#ifndef BTL_ABILITY_ULTRA_INSTINCT
+#define BTL_ABILITY_ULTRA_INSTINCT 0x7E
+#define BTL_ULTRA_INSTINCT_STAMINA BtlMember_UltraInstinctStamina(chr, 0)
+extern f32 Port_ModValue(const char *key, f32 def);
+extern s32 BtlMember_UltraInstinctStamina(void *chr, s32 activate);
+#endif
+#endif
 s32 BtlAct_Action41(Chr *chr, s32 phase) {
     s32 idle;
 
@@ -1198,10 +1211,18 @@ s32 BtlAct_Action41(Chr *chr, s32 phase) {
         if (BtlAct_GetPrev(chr) != 0x41) {
             chr->unkD8C = 0;
         }
+#ifdef PORT
+        if (BtlMember_HasAbility(chr, BTL_ABILITY_ULTRA_INSTINCT)) {
+            chr->unkD8C = BtlChar_FrameMod(3);  /* one of the three sways */
+        }
+#endif
         BtlAnim_Play(chr, chr->unkD8C + 0x193, 0.15f);
         chr->unkD8C++;
         chr->unkD8C %= 3;
         BtlCharSnd_PlayCommon(chr, 0x1F);
+#ifdef PORT
+        if (!BtlMember_HasAbility(chr, BTL_ABILITY_ULTRA_INSTINCT))  /* no camera cut for every hit */
+#endif
         ChrCam_RequestCut(chr, 1, chr->camSide < 0.0f ? 0x11 : 0x12);
     }
     if (phase == 1) {
@@ -1220,6 +1241,9 @@ s32 BtlAct_Action41(Chr *chr, s32 phase) {
         BtlMove_Step(chr, 2, 5, 3, 0.0f, BTL_KMH(100.0f));
         BtlMove_ApplyGravity(chr);
         BtlChar_SetFlag(chr, 0xD5);
+#ifdef PORT
+        if (!BtlMember_HasAbility(chr, BTL_ABILITY_ULTRA_INSTINCT))  /* not the chained sway of the original */
+#endif
         BtlChar_SetFlag(chr, 0x4E);
         if (BtlChar_TestFlag(chr, 0x11)) {
             BtlChar_SetHeldFlag(chr, 0xE);
@@ -1229,6 +1253,11 @@ s32 BtlAct_Action41(Chr *chr, s32 phase) {
         switch (BtlAnim_GetId(chr)) {
             case 0:
             case 0x26:
+#ifdef PORT
+                if (BtlMember_HasAbility(chr, BTL_ABILITY_ULTRA_INSTINCT)) {
+                    BtlAct_Request(chr, 0xB);  /* the sway is over: back to neutral */
+                } else
+#endif
                 if (BtlChar_TestFlag(chr, 0xB5) || BtlOpp_GetSeenAction(chr) != 0x45) {
                     BtlAct_Request(chr, 0x6A);
                 }
@@ -1241,6 +1270,10 @@ s32 BtlAct_Action41(Chr *chr, s32 phase) {
     }
 }
 
+#ifdef PORT
+extern s32 BtlMember_PayStamina(Chr *chr, s32 points);  /* Mod "Ultra Instinct" v56 */
+extern f32 Port_ModValue(const char *key, f32 def);
+#endif
 /* Action 0x42: animation 0x192 over 25 frames; costs 5000 health (flags 0x42B), holds flag 0x4B for the first half. */
 s32 BtlAct_Action42(Chr *chr, s32 phase) {
     if (phase == 0) {
@@ -1248,7 +1281,11 @@ s32 BtlAct_Action42(Chr *chr, s32 phase) {
         BtlChar_SetHeldFlag(chr, 0xE);
         BtlChar_GetPos(chr)->unk98 = 0.0f;
         BtlChar_GetPos(chr)->unk9C = 0.0f;
+#ifdef PORT
+        BtlMember_PayStamina(chr, (s32)Port_ModValue("escape_stamina", 10.0f));  /* not health */
+#else
         BtlMember_Damage(chr, 5000, 0x42B);
+#endif
         BtlChar_SetHeldFlag(chr, 0x4B);
         BtlCharSnd_PlayCommon(chr, 0x24);
         BtlChar_PlayVoice(chr, 6);

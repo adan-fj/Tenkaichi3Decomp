@@ -96,6 +96,12 @@ extern void BtlAiSense_Update(BtlAiWork *s);
 
 extern BtlAi *gBtlAi;
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: the CPU and the mod's skills (btl_act_j.c) */
+extern void BtlAct_CpuThink(s32 side, s32 level, f32 dist, u32 *buttons, f32 *x, f32 *y);
+extern void BtlAct_CpuReset(void);
+#endif
+
 /* Frees what the block owns, rebinds the shared AI data and resets both sides from their fighters. */
 void BtlAiMgr_Reset(void) {
     BtlAiWork *s;
@@ -119,6 +125,9 @@ void BtlAiMgr_Reset(void) {
     for (i = 0; i < 2; i++) {
         AiThink_ResetSide(i, 0);
     }
+#ifdef PORT
+    BtlAct_CpuReset();
+#endif
 }
 
 /* Resets one side's controller from its fighter. */
@@ -273,6 +282,9 @@ void BtlAiMgr_Update(void) {
             BtlAiSense_Update(s);
             AiThink_Think(s);
             BtlAi_RunSeq(s);
+#ifdef PORT
+            BtlAct_CpuThink(i, s->level, gBtlAi->dist, &s->out.buttons, &s->out.stickX, &s->out.stickY);
+#endif
             BtlAi_SendInput(s);
         }
     }

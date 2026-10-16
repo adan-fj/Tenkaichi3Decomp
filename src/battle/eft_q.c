@@ -225,6 +225,18 @@ void EftGlow_Setup(EftGlow *w, s32 objId) {
 
     EftGlow_SetType(w, objId, type, paramFlags);
     w->scale = BtlCharApi_GetHeight(objId) / 19.35f;
+#ifdef PORT
+    {
+        extern s32 BtlCharApi_GodForm(s32 objId);
+        extern void Port_ModGodGlowTint(f32 *vec, s32 count, s32 form);
+        s32 god = BtlCharApi_GodForm(objId);  /* Mod "Ultra Instinct" v56 */
+
+        if (god) {
+            Port_ModGodGlowTint(&w->colorA.x, 2, god);
+            Port_ModGodGlowTint(&w->color[0].x, 4, god);
+        }
+    }
+#endif
 }
 
 /* Init callback of the glow task: arg[0] is the fighter's object id. */

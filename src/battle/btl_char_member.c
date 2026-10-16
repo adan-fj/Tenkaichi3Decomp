@@ -133,6 +133,18 @@ void BtlMember_LoadParams(BtlMemberChr *chr, s32 member, s32 init, f32 healthPct
     }
     if (g->fused == 0) {
         g->healthMax = gBtlChars->paramTbl[m->chara].healthMax;
+#ifdef PORT
+        {
+            extern s32 Port_ModPower(s32 chara, f32 *level, f32 *damage, s32 *health);
+            f32 lv;
+            f32 dm;
+            s32 hp = 0;
+
+            if (Port_ModPower(m->chara, &lv, &dm, &hp) && hp > 0) {  /* Mod "Ultra Instinct" v56: power_levels.csv */
+                g->healthMax = hp;
+            }
+        }
+#endif
         if (BtlMember_HasAbilityOf(chr, member, 100)) {
             g->healthMax += 30000;
         } else if (BtlMember_HasAbilityOf(chr, member, 99)) {
@@ -170,6 +182,24 @@ void BtlMember_LoadParams(BtlMemberChr *chr, s32 member, s32 init, f32 healthPct
         if (BtlMember_HasAbilityOf(chr, member, 0x1A)) {
             g->blast = g->blastMax;
         }
+#ifdef PORT
+        {
+            extern f32 Port_ModValue(const char *key, f32 def);
+            f32 pct = Port_ModValue("stamina_start", 100.0f);  /* Mod "Ultra Instinct" v56 */
+
+            pct = pct < 0.0f ? 0.0f : pct > 100.0f ? 100.0f : pct;
+            if (g->blast < (s32)((f32)g->blastMax * pct / 100.0f)) {
+                g->blast = (s32)((f32)g->blastMax * pct / 100.0f);
+            }
+            *(f32 *)((u8 *)m + 0xA0) = 0.0f;  /* no transformation ceiling yet (btl_char_member.c) */
+            if (member == 0) {
+                extern void BtlMember_TransformHealReset(s32 side);
+
+                BtlMember_TransformHealReset(*(s32 *)chr & 1);  /* a battle starts: the refill is back */
+            }
+            *(s32 *)((u8 *)m + 0x98) = 0;  /* no Ultra Instinct slide (btl_char_action.c) */
+        }
+#endif
         g->variant = variant;
         g->maxPower = 0;
     }
@@ -339,6 +369,316 @@ void BtlMember_PrevSwitchTarget(BtlMemberChr *chr) {
     }
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: power levels by character id (power_levels.csv: canon numbers, the usual transformation multipliers,
+   estimates for the rest). Damage dealt by the opponent is scaled by (base A / base B) ^ 0.25 times the square root
+   of the form and Kaioken multipliers, between 0.1f and 10.0f: a Super Saiyan (x50) hits his base form about 7 times as
+   hard and takes about 1/7; Kaioken x4 about 2 times. sBtlPowerLevel holds the levels themselves (the slower
+   time, plat_stub.c), sBtlPowerDamage base ^ 0.5 * (form / base) for the damage. */
+#define BTL_POWER_COUNT 161
+static const f32 sBtlPowerLevel[BTL_POWER_COUNT] = {
+    8.000000e+03f, 3.000000e+06f, 1.500000e+08f, 6.000000e+07f, 3.000000e+09f, 6.000000e+09f,
+    2.400000e+10f, 1.000000e+09f, 5.000000e+10f, 4.000000e+11f, 4.000000e+12f, 2.600000e+02f,
+    2.600000e+03f, 2.800000e+03f, 1.000000e+07f, 5.000000e+08f, 1.000000e+09f, 4.000000e+07f,
+    2.000000e+09f, 4.000000e+09f, 4.000000e+07f, 3.000000e+10f, 3.500000e+03f, 1.000000e+09f,
+    4.200000e+04f, 1.770000e+03f, 1.480000e+03f, 1.830000e+03f, 6.100000e+02f, 1.800000e+04f,
+    1.800000e+05f, 4.000000e+06f, 2.000000e+08f, 2.400000e+08f, 6.000000e+07f, 3.000000e+09f,
+    6.000000e+09f, 7.000000e+09f, 4.000000e+12f, 3.000000e+06f, 1.500000e+08f, 4.000000e+06f,
+    2.000000e+08f, 3.000000e+08f, 1.000000e+07f, 5.000000e+08f, 9.000000e+06f, 4.500000e+08f,
+    5.000000e+07f, 2.500000e+09f, 1.000000e+10f, 1.500000e+09f, 7.500000e+10f, 7.500000e+10f,
+    2.000000e+14f, 1.000000e+02f, 1.200000e+02f, 1.200000e+02f, 5.000000e+08f, 1.000000e+09f,
+    9.700000e+02f, 3.000000e+09f, 1.000000e+09f, 5.000000e+08f, 1.000000e+10f, 4.000000e+10f,
+    1.390000e+02f, 1.800000e+02f, 1.400000e+02f, 1.200000e+02f, 1.000000e+02f, 1.200000e+04f,
+    1.200000e+05f, 1.000000e+04f, 1.000000e+05f, 2.000000e+03f, 2.000000e+04f, 1.500000e+03f,
+    1.500000e+04f, 1.200000e+03f, 4.000000e+03f, 4.000000e+04f, 2.300000e+04f, 3.000000e+04f,
+    2.200000e+04f, 1.800000e+04f, 1.200000e+05f, 4.000000e+04f, 7.000000e+04f, 6.000000e+04f,
+    1.350000e+04f, 5.300000e+05f, 1.060000e+06f, 2.000000e+06f, 6.000000e+07f, 1.200000e+08f,
+    1.000000e+08f, 5.000000e+07f, 6.000000e+03f, 1.500000e+03f, 3.000000e+08f, 2.200000e+08f,
+    2.100000e+08f, 1.500000e+08f, 1.400000e+08f, 2.500000e+08f, 3.500000e+08f, 6.000000e+08f,
+    9.000000e+08f, 3.000000e+08f, 5.000000e+01f, 2.000000e+09f, 1.000000e+10f, 1.200000e+10f,
+    2.000000e+10f, 2.800000e+10f, 4.000000e+10f, 2.500000e+10f, 8.000000e+02f, 8.000000e+03f,
+    3.000000e+04f, 1.500000e+04f, 1.500000e+05f, 5.000000e+04f, 2.000000e+05f, 1.500000e+08f,
+    1.000000e+08f, 1.500000e+08f, 4.000000e+08f, 3.000000e+08f, 1.000000e+09f, 3.000000e+07f,
+    1.500000e+09f, 3.000000e+09f, 3.000000e+08f, 5.000000e+08f, 9.000000e+08f, 3.000000e+09f,
+    3.000000e+10f, 1.500000e+10f, 1.000000e+11f, 3.000000e+11f, 1.000000e+12f, 1.000000e+13f,
+    3.000000e+12f, 2.000000e+12f, 3.000000e+12f, 1.000000e+13f, 2.100000e+02f, 3.800000e+02f,
+    1.500000e+02f, 2.000000e+02f, 1.000000e+02f, 2.000000e+02f, 1.600000e+02f, 2.600000e+02f,
+    1.000000e+03f, 1.300000e+02f, 1.000000e+03f, 4.000000e+06f, 2.000000e+08f,
+};
+static const f32 sBtlPowerDamage[BTL_POWER_COUNT] = {
+    8.944272e+01f, 1.732051e+03f, 1.224745e+04f, 7.745967e+03f, 5.477226e+04f, 7.745967e+04f,
+    1.549193e+05f, 3.162278e+04f, 2.236068e+05f, 6.324555e+05f, 2.000000e+06f, 1.612452e+01f,
+    5.099020e+01f, 5.291503e+01f, 3.162278e+03f, 2.236068e+04f, 3.162278e+04f, 6.324555e+03f,
+    4.472136e+04f, 6.324555e+04f, 6.324555e+03f, 1.732051e+05f, 5.916080e+01f, 3.162278e+04f,
+    2.049390e+02f, 4.207137e+01f, 3.847077e+01f, 4.277850e+01f, 2.469818e+01f, 1.341641e+02f,
+    4.242641e+02f, 2.000000e+03f, 1.414214e+04f, 1.549193e+04f, 7.745967e+03f, 5.477226e+04f,
+    7.745967e+04f, 8.366600e+04f, 2.000000e+06f, 1.732051e+03f, 1.224745e+04f, 2.000000e+03f,
+    1.414214e+04f, 1.732051e+04f, 3.162278e+03f, 2.236068e+04f, 3.000000e+03f, 2.121320e+04f,
+    7.071068e+03f, 5.000000e+04f, 1.000000e+05f, 3.872983e+04f, 2.738613e+05f, 2.738613e+05f,
+    1.414214e+07f, 1.000000e+01f, 1.095445e+01f, 1.095445e+01f, 2.236068e+04f, 3.162278e+04f,
+    3.114482e+01f, 5.477226e+04f, 3.162278e+04f, 2.236068e+04f, 1.000000e+05f, 2.000000e+05f,
+    1.178983e+01f, 1.341641e+01f, 1.183216e+01f, 1.095445e+01f, 1.000000e+01f, 1.095445e+02f,
+    3.464102e+02f, 1.000000e+02f, 3.162278e+02f, 4.472136e+01f, 1.414214e+02f, 3.872983e+01f,
+    1.224745e+02f, 3.464102e+01f, 6.324555e+01f, 2.000000e+02f, 1.516575e+02f, 1.732051e+02f,
+    1.483240e+02f, 1.341641e+02f, 3.464102e+02f, 2.000000e+02f, 2.645751e+02f, 2.449490e+02f,
+    1.161895e+02f, 7.280110e+02f, 1.029563e+03f, 1.414214e+03f, 7.745967e+03f, 1.095445e+04f,
+    1.000000e+04f, 7.071068e+03f, 7.745967e+01f, 3.872983e+01f, 1.732051e+04f, 1.483240e+04f,
+    1.449138e+04f, 1.224745e+04f, 1.183216e+04f, 1.581139e+04f, 1.870829e+04f, 2.449490e+04f,
+    3.000000e+04f, 1.732051e+04f, 7.071068e+00f, 4.472136e+04f, 1.000000e+05f, 1.095445e+05f,
+    1.414214e+05f, 1.673320e+05f, 2.000000e+05f, 1.581139e+05f, 2.828427e+01f, 8.944272e+01f,
+    1.732051e+02f, 1.224745e+02f, 3.872983e+02f, 2.236068e+02f, 4.472136e+02f, 1.224745e+04f,
+    1.000000e+04f, 1.224745e+04f, 2.000000e+04f, 1.732051e+04f, 3.162278e+04f, 5.477226e+03f,
+    3.872983e+04f, 5.477226e+04f, 1.732051e+04f, 2.236068e+04f, 3.000000e+04f, 5.477226e+04f,
+    1.732051e+05f, 1.224745e+05f, 3.162278e+05f, 5.477226e+05f, 1.000000e+06f, 3.162278e+06f,
+    1.732051e+06f, 1.414214e+06f, 1.732051e+06f, 3.162278e+06f, 1.449138e+01f, 1.949359e+01f,
+    1.224745e+01f, 1.414214e+01f, 1.000000e+01f, 1.414214e+01f, 1.264911e+01f, 1.612452e+01f,
+    3.162278e+01f, 1.140175e+01f, 3.162278e+01f, 2.000000e+03f, 1.414214e+04f,
+};
+
+extern f32 BtlAct_KaiokenMult(BtlMemberChr *chr);
+extern f32 Port_ModValue(const char *key, f32 def);
+extern s32 Port_ModPower(s32 chara, f32 *level, f32 *damage, s32 *health);
+
+/* The character id of the active member. */
+s32 BtlMember_GetActiveChara(BtlMemberChr *chr) {
+    return BtlMember_GetActive(chr)->chara;
+}
+
+/* The power level of the active member, times the Kaioken multiplier (btl_act_h_b.c). */
+static f32 BtlMember_ActiveFormLevel(BtlMemberChr *chr);
+
+f32 BtlMember_PowerLevel(BtlMemberChr *chr) {
+    return BtlMember_ActiveFormLevel(chr) * BtlAct_KaiokenMult(chr);
+}
+
+/* The level for damage: base compressed, form and Kaioken multipliers whole (the square root follows). */
+static f32 BtlMember_DamageLevel(BtlMemberChr *chr) {
+    f32 e = 2.0f * Port_ModValue("power_exponent", 0.25f);
+
+    return powf(BtlMember_ActiveFormLevel(chr), e) * powf(BtlAct_KaiokenMult(chr), e);
+}
+
+static f32 BtlMember_PowerScale(BtlMemberChr *chr) {
+    BtlMemberChr *opp = BtlChar_Get(BtlOpp_GetPlayer(chr));
+    f32 r;
+
+    if (opp == NULL) {
+        return 1.0f;
+    }
+    r = sqrtf(BtlMember_DamageLevel(opp) / BtlMember_DamageLevel(chr));
+    if (r < Port_ModValue("damage_min_multiplier", 0.1f)) {
+        r = Port_ModValue("damage_min_multiplier", 0.1f);
+    }
+    if (r > Port_ModValue("damage_max_multiplier", 10.0f)) {
+        r = Port_ModValue("damage_max_multiplier", 10.0f);
+    }
+    return r;
+}
+
+/* Everyone's attack animations run faster with power: 1x for the weakest power level of the table, 1.35x for the
+   strongest, on a log scale (Port_ModAttackSpeed, plat_stub.c). The level of the form, without Kaioken, which has
+   its own speed. Used in btl_char_status_anim.c. */
+extern float Port_ModAttackSpeed(float pl, float lo, float hi);
+f32 BtlMember_AttackSpeed(BtlMemberChr *chr) {
+    return Port_ModAttackSpeed(BtlMember_ActiveFormLevel(chr), 5.000000e+01f, 2.000000e+14f);
+}
+
+/* Mod "Ultra Instinct" v56: transformations. The power level of character id `c` itself (no Kaioken). */
+static f32 BtlMember_CharaPower(s32 c) {
+    f32 pl;
+    f32 dmg;
+    s32 hp;
+
+    if (!Port_ModPower(c, &pl, &dmg, &hp)) {
+        pl = (c >= 0 && c < BTL_POWER_COUNT) ? sBtlPowerLevel[c] : 1.0f;
+    }
+    return pl;
+}
+
+/* Mod "Ultra Instinct" v56: god forms (btl_act_h_b.c). A god form's power level is its line's base level times its multiplier. */
+extern s32 BtlAct_GodActive(BtlMemberChr *chr);
+extern s32 BtlAct_GodPending(BtlMemberChr *chr);
+extern f32 Port_ModGodLevel(s32 chara, s32 god);
+
+static f32 BtlMember_FormPower(s32 chara, s32 god) {
+    return god ? Port_ModGodLevel(chara, god) : BtlMember_CharaPower(chara);
+}
+
+/* The power level of the form the active member is in (no Kaioken). */
+static f32 BtlMember_ActiveFormLevel(BtlMemberChr *chr) {
+    return BtlMember_FormPower(BtlMember_GetActive(chr)->chara, BtlAct_GodActive(chr));
+}
+
+/* Mod "Ultra Instinct" v56: for the CPU (btl_act_j.c): the power level of the form the fighter is in, and of form `chara` (god form
+   `god`, 0 none), without Kaioken. */
+f32 BtlMember_FormLevel(BtlMemberChr *chr) {
+    return BtlMember_ActiveFormLevel(chr);
+}
+
+f32 BtlMember_FormPowerOf(s32 chara, s32 god) {
+    return BtlMember_FormPower(chara, god);
+}
+
+/* The member's transformation ceiling: after going down from a form, no form at or above that one's power level
+   (transform_ceiling; 0 = none). Kept in the spare tail of the member entry (+0xA0), cleared when the battle loads
+   the member (BtlMember_LoadParams). */
+#define BTL_MEMBER_CEILING(m) (*(f32 *)((u8 *)(m) + 0xA0))
+
+/* BtlAct_CanTransform: whether the active member may take the form `target`. */
+s32 BtlMember_TransformAllowed(BtlMemberChr *chr, s32 target) {
+    f32 top = BTL_MEMBER_CEILING(BtlMember_GetActive(chr));
+
+    if (Port_ModValue("transform_ceiling", 0.0f) == 0.0f || top <= 0.0f) {
+        return 1;
+    }
+    return BtlMember_CharaPower(target) < top;
+}
+
+/* BtlChar_OnModelLoaded, before the form changes from `from` to `to`: notes the ceiling when going down; 1 when going
+   up. */
+s32 BtlMember_TransformBegin(BtlMemberChr *chr, s32 from, s32 to) {
+    BtlMember *m = BtlMember_GetActive(chr);
+    f32 a = BtlMember_FormPower(from, BtlAct_GodActive(chr));
+    f32 b = BtlMember_FormPower(to, BtlAct_GodPending(chr));
+
+    if (b < a && (BTL_MEMBER_CEILING(m) <= 0.0f || a < BTL_MEMBER_CEILING(m))) {
+        BTL_MEMBER_CEILING(m) = a;
+    }
+    return b > a;
+}
+
+/* Mod "Ultra Instinct" v56: the stamina Ultra Instinct costs (activate 1: switching it on; 0: one dodge), by the fighter's power level
+   (Kaioken included): the weaker, the more, as a weak body can hardly hold that power. On a log scale from
+   ultra_instinct_power_weakest (cost *_weakest) to ultra_instinct_power_strongest (cost *_strongest). */
+s32 BtlMember_UltraInstinctStamina(BtlMemberChr *chr, s32 activate) {
+    f32 lo = Port_ModValue("ultra_instinct_power_weakest", 100.0f);
+    f32 hi = Port_ModValue("ultra_instinct_power_strongest", 60000000.0f);
+    f32 weak = Port_ModValue(activate ? "ultra_instinct_activate_stamina_weakest" : "ultra_instinct_dodge_stamina_weakest",
+                             activate ? 100.0f : 25.0f);
+    f32 strong = Port_ModValue(activate ? "ultra_instinct_activate_stamina_strongest"
+                                        : "ultra_instinct_dodge_stamina_strongest", activate ? 10.0f : 2.0f);
+    f32 pl = BtlMember_PowerLevel(chr);
+    f32 t;
+
+    if (lo <= 0.0f || hi <= lo || pl <= 0.0f) {
+        return (s32)(weak + 0.5f);
+    }
+    t = (logf(pl) - logf(lo)) / (logf(hi) - logf(lo));
+    t = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
+    return (s32)(weak + (strong - weak) * t + 0.5f);
+}
+
+/* Mod "Ultra Instinct" v56: the slide of a busy Ultra Instinct fighter (btl_char_action.c), kept in the spare tail of the member
+   entry: +0x90 / +0x94 the step per frame, +0x98 the frames left. */
+s32 BtlMember_SlideActive(BtlMemberChr *chr) {
+    return *(s32 *)((u8 *)BtlMember_GetActive(chr) + 0x98) > 0;
+}
+
+void BtlMember_SlideSet(BtlMemberChr *chr, f32 dx, f32 dz, s32 frames) {
+    u8 *m = (u8 *)BtlMember_GetActive(chr);
+
+    *(f32 *)(m + 0x90) = dx;
+    *(f32 *)(m + 0x94) = dz;
+    *(s32 *)(m + 0x98) = frames;
+}
+
+s32 BtlMember_SlideTake(BtlMemberChr *chr, f32 *dx, f32 *dz) {
+    u8 *m = (u8 *)BtlMember_GetActive(chr);
+
+    if (*(s32 *)(m + 0x98) <= 0) {
+        return 0;
+    }
+    *dx = *(f32 *)(m + 0x90);
+    *dz = *(f32 *)(m + 0x94);
+    *(s32 *)(m + 0x98) -= 1;
+    return 1;
+}
+
+/* Mod "Ultra Instinct" v56: stamina drained by the form the fighter is in, every frame (btl_char_action.c): power_levels.csv
+   stamina_drain (points of 100 per second) of the form, god_<form>_stamina_drain in a god form. Returns 1 when the
+   stamina is out while something is on (a form other than the base one, a god form, Kaioken, Ultra Instinct, Super
+   Speed): it all ends then (btl_act_j.c: BtlAct_StaminaOut). */
+extern f32 Port_ModStaminaDrain(s32 chara, s32 god);
+extern s32 Port_ModBaseOf(s32 chara);
+static f32 sBtlStaminaDrain[2];
+
+s32 BtlMember_StaminaTick(BtlMemberChr *chr) {
+    extern s32 BtlAct_ModeOn(BtlMemberChr *chr, s32 bit);
+    BtlMember *m = BtlMember_GetActive(chr);
+    BtlMemberGauge *g = BtlMember_GetActiveGauge(chr);
+    s32 side = *(s32 *)chr & 1;
+    s32 god = BtlAct_GodActive(chr);
+    f32 rate = Port_ModStaminaDrain(m->chara, god);
+    s32 on = god != 0 || m->chara != Port_ModBaseOf(m->chara) || BtlAct_ModeOn(chr, 0x600) ||
+             BtlChar_TestFlag(chr, 0x98);
+
+    if (rate > 0.0f && g->blastMax > 0 && g->blast > 0) {
+        s32 whole;
+
+        sBtlStaminaDrain[side] += rate * (f32)g->blastMax / 100.0f / 30.0f;  /* blast units this frame */
+        whole = (s32)sBtlStaminaDrain[side];
+        sBtlStaminaDrain[side] -= (f32)whole;
+        g->blast = g->blast > whole ? g->blast - whole : 0;
+    }
+    return on && g->blast <= 0;
+}
+
+/* L2 + R3 (btl_act_j.c): whether god form `god` (in model `model`) stays under the member's ceiling. */
+s32 BtlMember_GodAllowed(BtlMemberChr *chr, s32 model, s32 god) {
+    f32 top = BTL_MEMBER_CEILING(BtlMember_GetActive(chr));
+
+    if (Port_ModValue("transform_ceiling", 0.0f) == 0.0f || top <= 0.0f) {
+        return 1;
+    }
+    return BtlMember_FormPower(model, god) < top;
+}
+
+/* Whether player 0 / 1 has had its refill this battle (cleared when the battle sets up its first member). */
+static s32 sBtlTransformHealed[2];
+
+/* A battle starts for player `side` (btl_char_member.c: its first member's starting gauges): its refill is back. */
+void BtlMember_TransformHealReset(s32 side) {
+    sBtlTransformHealed[side & 1] = 0;
+}
+
+/* Mod "Ultra Instinct" v56: for the CPU (btl_act_j.c): whether player `side`'s next transformation up refills the health. */
+s32 BtlMember_TransformHeals(s32 side) {
+    f32 mode = Port_ModValue("transform_up_heals", 1.0f);
+
+    return mode >= 2.0f || (mode != 0.0f && !sBtlTransformHealed[side & 1]);
+}
+
+/* After a transformation up: both fighters back to full health. transform_up_heals: 0 never, 1 only the first
+   transformation up of each player in the battle (going back down and up again, or transforming further, refills
+   nothing), 2 every transformation up. */
+void BtlMember_TransformHealAll(BtlMemberChr *chr) {
+    f32 mode = Port_ModValue("transform_up_heals", 1.0f);
+    s32 side = *(s32 *)chr & 1;
+    s32 i;
+
+    if (mode == 0.0f) {
+        return;
+    }
+    if (mode < 2.0f) {
+        if (sBtlTransformHealed[side]) {
+            return;
+        }
+        sBtlTransformHealed[side] = 1;
+    }
+    for (i = 0; i < 2; i++) {
+        BtlMemberChr *c = BtlChar_Get(i);
+
+        if (c != NULL) {
+            BtlMemberGauge *g = BtlMember_GetActiveGauge(c);
+
+            if (g->health > 0) {
+                g->health = g->healthMax;
+            }
+        }
+    }
+}
+#endif
+
 /* Takes health from the active member after every modifier; returns the health actually lost.
  *
  * In order: halved when the current animation has flag 0x800; combo scaling from the 5th hit (3% less per hit down to
@@ -376,6 +716,9 @@ s32 BtlMember_Damage(BtlMemberChr *chr, s32 amount, s32 flags) {
     if (!(flags & BTL_DMG_NO_DEFENSE)) {
         s32 second = 1;
         s32 v = amount * BtlParam_GetDamageTakenScale(chr);
+#ifdef PORT
+        v = (s32)((f32)v * BtlMember_PowerScale(chr));
+#endif
 
         if (v <= 0 && amount > 0) {
             amount = 1;
@@ -618,6 +961,47 @@ void BtlMember_SubBlast(BtlMemberChr *chr, s32 amount) {
     }
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: stamina is the blast stock gauge read as 0..100, the percent of its maximum (hud_b.c shows it
+   that way; everything that costs stocks spends it unchanged). Pays `points` of it; 0, and nothing paid, when there
+   is not that much or there is no gauge at all. */
+s32 BtlMember_PayStamina(BtlMemberChr *chr, s32 points) {
+    BtlMemberGauge *g = BtlMember_GetActiveGauge(chr);
+    s32 cost;
+
+    if (g->blastMax <= 0) {
+        return 0;
+    }
+    cost = g->blastMax / 100 * points;
+    if (g->blast < cost) {
+        return 0;
+    }
+    BtlMember_SubBlast(chr, cost);
+    return 1;
+}
+
+/* The blast gauge amount of `points` stamina (0 without a gauge). */
+s32 BtlMember_StaminaUnits(BtlMemberChr *chr, s32 points) {
+    BtlMemberGauge *g = BtlMember_GetActiveGauge(chr);
+
+    return g->blastMax > 0 ? g->blastMax / 100 * points : 0;
+}
+
+/* Whether there are `points` of stamina. */
+s32 BtlMember_HasStamina(BtlMemberChr *chr, s32 points) {
+    BtlMemberGauge *g = BtlMember_GetActiveGauge(chr);
+
+    return g->blastMax > 0 && g->blast >= g->blastMax / 100 * points;
+}
+
+/* The stamina, 0..100. */
+s32 BtlMember_StaminaPercent(BtlMemberChr *chr) {
+    BtlMemberGauge *g = BtlMember_GetActiveGauge(chr);
+
+    return g->blastMax > 0 ? (s32)((f32)g->blast * 100.0f / (f32)g->blastMax) : 0;
+}
+#endif
+
 /* Adds to the +0x1C gauge, up to 30000. */
 void BtlMember_AddMaxPower(BtlMemberChr *chr, s32 amount) {
     BtlMemberGauge *g = BtlMember_GetActiveGauge(chr);
@@ -728,6 +1112,13 @@ s32 BtlMember_IsMaxPowerEmpty(BtlMemberChr *chr) {
 
 /* Whether the active member has ability bit n. */
 s32 BtlMember_HasAbility(BtlMemberChr *chr, s32 n) {
+#ifdef PORT
+    if (n == 0x7E || n == 0x7D) {
+        extern s32 BtlAct_ModeOn(BtlMemberChr *chr, s32 bit);
+
+        return BtlAct_ModeOn(chr, n == 0x7E ? 0x200 : 0x400);  /* Mod "Ultra Instinct" v56 */
+    }
+#endif
     return BtlMember_HasAbilityOf(chr, BtlMember_GetActiveIndex(chr), n);
 }
 

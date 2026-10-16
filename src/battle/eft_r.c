@@ -928,6 +928,9 @@ void EftCharge_PostUpdate(EftRTask *task) {
 void EftCharge_Draw(void) {
 }
 
+#ifdef PORT
+extern void BtlGod_RecolorCharge(s32 side, s32 *pack);  /* Mod "Ultra Instinct" v56 (btl_char_mgr.c) */
+#endif
 /* Manager init: loads the set from entry 2 of the character's effect pack, makes room for four tasks. */
 void EftChargeMgr_Init(EftRTask *task, s32 *arg) {
     EftRMgr *mgr = task->work;
@@ -940,6 +943,9 @@ void EftChargeMgr_Init(EftRTask *task, s32 *arg) {
     set = mgr->set;
     pack = BtlScene_GetCharPackEntry(arg[0], 2);
     set->pack = pack;
+#ifdef PORT
+    BtlGod_RecolorCharge(arg[0], pack);  /* a god form's charge particles */
+#endif
     if (pack != NULL) {
         EftEmit_LoadSet(NULL, set, 0, pack, 2, 1);
     }

@@ -526,10 +526,157 @@ void HudGauge_UpdateMaxPowerLamps(HudBGroup *node) {
     }
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: the blast stock gauge shown as stamina: a bar of 0..100 (percent of the gauge's maximum) with its
+   number, in place of the stock digit and the bar towards the next stock (sprites 35..38, 48, 75 are hidden). The
+   draw builds its sprites on the stack (no state kept between frames), in the vanilla blast stock look: the beveled
+   frame and its inner shape (texture 15), the shape tinted light blue up to the stamina, and the number in the stock
+   digits (texture 14). The right-hand copy is drawn mirrored, so its digits are un-mirrored and laid out the other
+   way round. */
+static s32 HudGauge_UpdateStamina(void) {
+    s32 hide[6] = { 35, 36, 37, 38, 48, 75 };
+    s32 i;
+
+    for (i = 0; i < 6; i++) {
+        HudSprite_Show(&gHudGauge->spr[hide[i]], 0);
+    }
+    return 1;
+}
+
+/* One stretch of a three-sliced piece of texture 15 (the frame: v 0..12; its inner shape: v 12..22, 48 texels wide,
+   slanted ends of 10): the part from texel u0 to u1 drawn over x0..x1. */
+static void HudGauge_StaminaSlice(HudBSprite *spr, s32 u0, s32 u1, s32 v0, s32 v1, s32 x0, s32 x1, s32 y0, s32 y1) {
+    HudSprite_InitTex(spr, gHudGauge->res, 0xF, 0);
+    HudSprite_SetRect(spr, x0, x1, y0, y1);
+    HudSprite_SetUv(spr, u0, u1, v0, v1);
+    HudSprite_Show(spr, x1 > x0);
+}
+
+/* The three slices of a piece over x0..x0 + w: texels a..b (its left end) and c..d (its right end) at their own
+   size, b..c (the plain middle) stretched; a piece narrower than its two ends squeezes them. */
+static s32 HudGauge_StaminaPiece(HudBSprite *spr, const s32 *cut, s32 v0, s32 v1, s32 x0, s32 w, s32 y0, s32 y1) {
+    s32 lw = cut[1] - cut[0];
+    s32 rw = cut[3] - cut[2];
+
+    if (w < lw + rw) {
+        lw = lw * w / (lw + rw);
+        rw = w - lw;
+    }
+    HudGauge_StaminaSlice(&spr[0], cut[0], cut[1], v0, v1, x0, x0 + lw, y0, y1);
+    HudGauge_StaminaSlice(&spr[1], cut[1], cut[2], v0, v1, x0 + lw, x0 + w - rw, y0, y1);
+    HudGauge_StaminaSlice(&spr[2], cut[2], cut[3], v0, v1, x0 + w - rw, x0 + w, y0, y1);
+    return 3;
+}
+
+static void HudGauge_DrawStamina(void) {
+    /* the vanilla fill's gradient, top to bottom: halves (the rows are a white patch of texture 15, tinted; 0x80
+       neutral). Textured, because the port widens untextured 2D shapes for the wide screen. */
+    static const u8 grad[6][3] = { { 0x5D, 0x77, 0x7F }, { 0x52, 0x6E, 0x7F }, { 0x2D, 0x4E, 0x7F },
+                                    { 0x1D, 0x48, 0x7F }, { 0x21, 0x5F, 0x7F }, { 0x24, 0x6F, 0x7F } };
+    HudBSprite spr[24];
+    s32 side = gHudGauge->side;
+    s32 max = BtlSide_GetBlastMax(side);
+    s32 flip = HUD_SCR(side) != 0;
+    s32 pow10[3] = { 1, 10, 100 };
+    s32 frameCut[4] = { 0, 8, 30, 48 };  /* the frame: its bevelled ends whole */
+    s32 wellCut[4] = { 2, 10, 34, 43 };  /* its inner shape, as the fill of the well */
+    s32 pct = 0;
+    s32 count = 0;
+    s32 fill;
+    s32 n;
+    s32 i;
+    s32 j;
+    s32 d;
+    s32 k;
+    s32 x;
+    s32 cx;
+    s32 cy;
+
+    memset(spr, 0, sizeof(spr));
+    if (max > 0) {
+        pct = (s32)((f32)gHudGauge->blast[side] * 100.0f / (f32)max);
+    }
+    if (pct < 0) {
+        pct = 0;
+    }
+    if (pct > 100) {
+        pct = 100;
+    }
+    /* the vanilla frame, 104 wide */
+    count += HudGauge_StaminaPiece(&spr[count], frameCut, 0, 12, -24, 104, 0, 12);
+    /* the fill, as the vanilla bar: six rows of its gradient in the lower part of the frame's well (rows 3..8), a
+       gentle parallelogram like the vanilla one (each row half a pixel further left than the one above, both ends),
+       86 wide when full */
+    fill = 86 * pct / 100;
+    (void)wellCut;
+    if (fill > 0) {
+        for (j = 0; j < 6; j++) {
+            x = -19 + (5 - j) / 2;
+            HudSprite_InitTex(&spr[count], gHudGauge->res, 0xF, 0);
+            HudSprite_SetRect(&spr[count], x, x + fill, 3 + j, 4 + j);
+            HudSprite_SetUv(&spr[count], 12, 28, 15, 18);  /* solid white inside the frame's inner shape */
+            HudSprite_SetColor(&spr[count], grad[j][0], grad[j][1], grad[j][2], 0x80);
+            HudSprite_Show(&spr[count], 1);
+            count++;
+        }
+    }
+    for (i = 0; i < count; i++) {
+        HudSprite_Draw(&spr[i], gHudGauge->res, 0);
+    }
+    /* the number: the vanilla stock digits (texture 14, 32 x 32 cells, 0..7), at 24 x 24 */
+    memset(spr, 0, sizeof(spr));
+    count = 0;
+    n = pct >= 100 ? 3 : pct >= 10 ? 2 : 1;
+    for (i = 0; i < n; i++) {
+        k = flip ? n - 1 - i : i;
+        x = 82 + k * 13;
+        d = pct / pow10[n - 1 - i] % 10;
+        if (d == 8) {  /* the right half of the 3, and its mirror for the left half */
+            cx = 3 * 32;
+            cy = 0;
+            for (j = 0; j < 2; j++) {
+                HudSprite_InitTex(&spr[count], gHudGauge->res, 0xE, 0);
+                if (j == 0) {
+                    HudSprite_SetRect(&spr[count], x, x + 12, -6, 18);
+                    HudSprite_SetUv(&spr[count], cx + 31, cx + 16, cy, cy + 32);
+                } else {
+                    HudSprite_SetRect(&spr[count], x + 12, x + 24, -6, 18);
+                    HudSprite_SetUv(&spr[count], cx + 15, cx + 31, cy, cy + 32);
+                }
+                HudSprite_SetMirror(&spr[count], 0);  /* symmetric: the gauge's mirror alone keeps the bowls inwards */
+                count++;
+            }
+            continue;
+        }
+        HudSprite_InitTex(&spr[count], gHudGauge->res, 0xE, 0);
+        HudSprite_SetRect(&spr[count], x, x + 24, -6, 18);
+        if (d == 9) {  /* the 6 turned round */
+            HudSprite_SetUv(&spr[count], 2 * 32 + 32, 2 * 32, 32 + 32, 32);
+        } else {
+            HudSprite_SetUv(&spr[count], (d % 4) * 32, (d % 4) * 32 + 32, (d / 4) * 32, (d / 4) * 32 + 32);
+        }
+        HudSprite_SetMirror(&spr[count], flip);
+        count++;
+    }
+    for (i = 0; i < count; i++) {
+        HudSprite_Draw(&spr[i], gHudGauge->res, 0);
+    }
+}
+#endif
+
 /* Update of node 8 (blast stock): the digit 0..7 (sprite 35), a copy of it that flashes (75: once when a stock is
  * gained, pulsing while the stock is full), and the fill bar towards the next stock (37, 25 px for 100000),
  * hidden with its frame (36, 38, 48) when the stock is full. */
+#ifdef PORT
 void HudGauge_UpdateBlast(void) {
+    HudGauge_UpdateStamina();
+}
+
+/* (the original update, unused with the stamina bar) */
+static void HudGauge_UpdateBlastOriginal(void) {
+#else
+void HudGauge_UpdateBlast(void) {
+#endif
     Ramp *ramp = &gHudGauge->blastFlash[gHudGauge->side];
     s32 blast = gHudGauge->blast[gHudGauge->side];
     u16 tbl[8][4] = {
@@ -960,6 +1107,10 @@ void HudGauge_DrawHpBarCount(HudBGroup *node) {
 
 /* Draw of node 8: the fill bar through the mask of sprite 38, then the digit and its flash. */
 void HudGauge_DrawBlast(void) {
+#ifdef PORT
+    HudGauge_DrawStamina();
+    return;
+#endif
     HudSprite_DrawAlphaClear(&gHudGauge->spr[38]);
     HudGfx_CallBegin(HudGauge_GsBeginMask);
     HudSprite_Draw(&gHudGauge->spr[37], gHudGauge->res, 1);
@@ -1717,8 +1868,13 @@ void HudGauge_Init(HudBGroup **out, void *res) {
     grp->childList[2] = &gHudGauge->grp[3];
     grp->childList[3] = &gHudGauge->grp[4];
     grp->childList[4] = &gHudGauge->grp[6];
+#ifdef PORT
+    grp->childList[5] = &gHudGauge->grp[9];  /* Mod "Ultra Instinct" v56: the stamina drawn after the status icons */
+    grp->childList[6] = &gHudGauge->grp[8];
+#else
     grp->childList[5] = &gHudGauge->grp[8];
     grp->childList[6] = &gHudGauge->grp[9];
+#endif
     grp->childList[7] = &gHudGauge->grp[11];
     grp->update = HudGauge_UpdatePanel;
     grp->draw = HudGauge_DrawSprites;

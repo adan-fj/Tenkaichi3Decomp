@@ -574,6 +574,40 @@ void BtlSuper_Finish(BtlSuperChr *chr, s32 cls) {
 /* Animation ids of a class 2..4 technique: 0x22 per class, starting at 0x105. */
 #define SUPER_ANIM(cls, n) ((cls) * 0x22 + 0xC1 + (n))
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: Blast 2 / Ultimate beams (0x106, 0x109, 0x10C) charge while their button (triangle) stays held once
+   the beam is ready to fire (flag 0xA7), up to the charge time (BtlSuper_GetChargeLimitFrames: the technique's own,
+   or charge_default_seconds). The charge (0..1, + 0xE44, cleared by BtlSuper_Begin) adds its bonus to the damage
+   (BtlSuper_GetDamage). A tap fires as always. Returns 1 while the beam keeps charging. */
+extern f32 Port_ModValue(const char *key, f32 def);
+extern s32 BtlInput_IsHeld(BtlSuperChr *chr, u32 mask);
+extern s32 BtlSuper_IsHoldChargeable(BtlSuperChr *chr, s32 slot);
+
+static s32 BtlSuper_HoldCharge(BtlSuperChr *chr, s32 cls) {
+    s32 limit;
+
+    if (Port_ModValue("all_energy_techniques_chargeable", 1.0f) == 0.0f || !BtlSuper_IsHoldChargeable(chr, cls) ||
+        !BtlInput_IsHeld(chr, 0x4)) {
+        return 0;
+    }
+    limit = BtlSuper_GetChargeLimitFrames(chr, cls);
+    if (limit < 1) {
+        limit = 1;
+    }
+    chr->chargeFull++;
+    chr->charge = (f32)chr->chargeFull / (f32)limit;
+    if (chr->charge >= 1.0f) {
+        chr->charge = 1.0f;
+        BtlChar_SetFxBit(chr, 0x1E);
+        BtlCharSnd_PlayCommon(chr, 0x14);
+        BtlCharSnd_PlayCommon(chr, 0x15);
+        BtlCharSnd_PlayCommon(chr, 0x1C);
+        return 0;
+    }
+    return 1;
+}
+#endif
+
 /*
  * Actions 0x106..0x108: a beam technique. Start animation (level 2 hit-stop) -> charge loop until the effect
  * raises flag 0xA7 (150 frames at most) -> fire -> firing loop until flag 0xA8 (150 frames at most) -> end.
@@ -633,7 +667,11 @@ void BtlAct_SuperBeamHandler(BtlSuperChr *chr, s32 phase) {
             if (++*timer > BTL_SUPER_TIMEOUT) {
                 BtlChar_SetHeldFlag(chr, 0xA7);
             }
+#ifdef PORT
+            if (BtlChar_TestFlag(chr, 0xA7) && !BtlSuper_HoldCharge(chr, cls)) {
+#else
             if (BtlChar_TestFlag(chr, 0xA7)) {
+#endif
                 if (chr->work[0] & 1) {
                     if (BtlChange_IsLoadedFor(chr->player)) {
                         BtlChange_SetReady(chr->player);
@@ -790,7 +828,11 @@ void BtlAct_SuperWarpBeamHandler(BtlSuperChr *chr, s32 phase) {
                 if (++*timer > BTL_SUPER_TIMEOUT) {
                     BtlChar_SetHeldFlag(chr, 0xA7);
                 }
+#ifdef PORT
+                if (BtlChar_TestFlag(chr, 0xA7) && !BtlSuper_HoldCharge(chr, cls)) {
+#else
                 if (BtlChar_TestFlag(chr, 0xA7)) {
+#endif
                     ++*stage;
                     *sub = 0;
                     *timer = 0;
@@ -969,7 +1011,11 @@ void BtlAct_SuperLongBeamHandler(BtlSuperChr *chr, s32 phase) {
             if (++*timer > BTL_SUPER_TIMEOUT) {
                 BtlChar_SetHeldFlag(chr, 0xA7);
             }
+#ifdef PORT
+            if (BtlChar_TestFlag(chr, 0xA7) && !BtlSuper_HoldCharge(chr, cls)) {
+#else
             if (BtlChar_TestFlag(chr, 0xA7)) {
+#endif
                 BtlAnim_Request(chr, SUPER_ANIM(cls, 2), 0.0f);
                 *timer = 0;
             }

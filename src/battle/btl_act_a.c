@@ -1695,11 +1695,40 @@ s32 BtlAct_RushFinishHandler(BtlActAChr *chr, s32 phase) {
                 turn = speed;
                 break;
         }
+#ifdef PORT
+        {
+            extern f32 BtlAct_DashStrikeChaseSpeed(void *chr);
+            f32 chase = BtlAct_DashStrikeChaseSpeed((void *)chr);  /* Mod "Ultra Instinct" v56: a dash strike */
+
+            extern f32 BtlAct_DashStrikeAim(void *chr, f32 *yaw, f32 *pitch);
+            f32 aimYaw;
+            f32 aimPitch;
+            f32 left = BtlAct_DashStrikeAim((void *)chr, &aimYaw, &aimPitch);
+
+            if (chase != 0.0f && left >= 0.0f) {
+                /* it flies on at the dash's speed while it winds up and charges, straight at the opponent (the stick picks the strike, it does not steer), and slows down to stop in front of it */
+                speed = chase > 0.0f ? BTL_KMH(chase) : BtlMoveParam_GetSpeed(chr, 6);
+                if (speed > left) {
+                    speed = left;
+                }
+                BtlMove_SetHeading(chr, aimYaw, aimPitch);
+                BtlMove_SetDirection(chr, 3);
+                BtlMove_Advance(chr, speed, 10000.0f);
+            } else {
+                BtlMove_TurnYaw(chr, mode, turn);
+                BtlMove_TurnPitch(chr, 5, 3.14159265f);
+                BtlMove_TurnModelYaw(chr, BTL_DEG(36.0f), 0.3f);
+                BtlMove_SetDirection(chr, 2);
+                BtlMove_Advance(chr, speed, BTL_KMH(100.0f));
+            }
+        }
+#else
         BtlMove_TurnYaw(chr, mode, turn);
         BtlMove_TurnPitch(chr, 5, 3.14159265f);
         BtlMove_TurnModelYaw(chr, BTL_DEG(36.0f), 0.3f);
         BtlMove_SetDirection(chr, 2);
         BtlMove_Advance(chr, speed, BTL_KMH(100.0f));
+#endif
         BtlMove_ApplyGravity(chr);
         BtlChar_SetFlag(chr, 0xD5);
         if (BtlChar_TestFlag(chr, 0x11)) {

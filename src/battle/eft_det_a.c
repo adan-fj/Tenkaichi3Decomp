@@ -769,6 +769,9 @@ void EftDet_PrepareAll(void) {
     }
 }
 
+#ifdef PORT
+extern void BtlColl_UltraInstinctWaves(void *list, s32 count);  /* Mod "Ultra Instinct" v56 */
+#endif
 /* The hit detection of one frame; nothing while the battle is paused. */
 void EftDet_Update(void) {
     if (Battle_GetWork()->flags & 0x100) {
@@ -777,6 +780,9 @@ void EftDet_Update(void) {
     EftDet_PrepareAll();
     EftDet_ClashPass();
     EftDet_StagePass();
+#ifdef PORT
+    BtlColl_UltraInstinctWaves(EftHit_GetList(), EftHit_GetList()->count);
+#endif
     EftDet_FighterPass();
 }
 

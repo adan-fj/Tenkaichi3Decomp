@@ -226,8 +226,507 @@ s32 BtlAct_CanTransform(BtlActJChr *chr, u32 index, s32 needBlast, s32 needAllow
     if (needBlast && !BtlMember_HasBlast(chr, cost)) {
         return 0;
     }
+#ifdef PORT
+    {
+        extern s32 BtlMember_TransformAllowed(BtlActJChr *chr, s32 target);
+
+        if (!BtlMember_TransformAllowed(chr, chara)) {  /* Mod "Ultra Instinct" v56: not back up past a form left */
+            return 0;
+        }
+    }
+#endif
     return 1;
 }
+
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: god forms (god_forms.csv): L2 + R3 + left / up / right / down takes Super Saiyan God, God Super
+   Saiyan, Rose or Super Saiyan 4 Limit Breaker, with the game's own transformation (sequence 0) into the model the
+   table gives (the base form's, the Super Saiyan form's or the Super Saiyan 4 form's), recoloured when it is loaded
+   (btl_char_mgr.c). The cost is god_<form>_cost blast stocks. With L2
+   held, R3 takes nothing else. */
+extern s32 Port_ModGodModel(s32 chara, s32 form);
+extern s32 Port_ModGodCost(s32 form);
+extern s32 BtlAct_GodActive(BtlActJChr *chr);
+extern void BtlAct_GodSetPending(BtlActJChr *chr, s32 god);
+extern s32 BtlMember_GodAllowed(BtlActJChr *chr, s32 model, s32 god);
+
+/* Out of stamina (BtlMember_StaminaTick): the transformation back to the line's base form (the model loaded again
+   ends Kaioken, Ultra Instinct, Super Speed and the god form, BtlAct_EndFlag98), always with its animation. */
+extern s32 Port_ModBaseOf(s32 chara);
+extern void BtlAct_Request(BtlActJChr *chr, s32 id);
+
+void BtlAct_StaminaOut(BtlActJChr *chr) {
+    s32 chara = BtlMember_GetActive(chr)->chara;
+    s32 base = Port_ModBaseOf(chara);
+
+    if (!BattleSide_IsCharaUsable(chr->player, base)) {
+        base = chara;
+    }
+    chr->form.index = 0;
+    chr->form.chara = base;
+    chr->form.costume = BtlMember_GetActive(chr)->costume;
+    chr->form.cost = 0;
+    chr->form.partner = -1;
+    chr->form.kind = 1;
+    chr->form.unk24 = 0xFF;
+    chr->form.unk28 = 0;
+    chr->form.variant = BtlMember_GetActiveGauge(chr)->variant;
+    chr->form.animChara = base;
+    chr->form.unk1C = base;
+    chr->form.voiceChara = base;
+    BtlAct_GodSetPending(chr, 0);
+    BtlAct_Request(chr, 0xEC);
+}
+
+extern s32 Port_ModGodTransformKind(s32 form);
+
+static s32 BtlAct_QueueGodForm(BtlActJChr *chr, s32 god) {
+    s32 model = Port_ModGodModel(BtlMember_GetActive(chr)->chara, god);
+    s32 cost;
+
+    if (model < 0 || BtlAct_GodActive(chr) == god) {
+        return 0;
+    }
+    if (!BtlChar_TestFlag(chr, 0x10F) && chr->form.allowed == 0) {
+        return 0;
+    }
+    if (BtlMember_HasAbility(chr, 0x5E) || BtlChar_TestFlag(chr, 0xAF) || BtlChar_TestMemberUnk70(chr)) {
+        return 0;
+    }
+    if (!BattleSide_IsCharaUsable(chr->player, model) || !BtlMember_GodAllowed(chr, model, god)) {
+        return 0;
+    }
+    cost = Port_ModGodCost(god) * 100000;
+    if (!BtlMember_HasBlast(chr, cost)) {
+        extern void HudCombo_ShowModeText(s32 side, s32 kind, s32 value);
+
+        HudCombo_ShowModeText(chr->player, 9, 0);  /* "Not enough stamina" */
+        return 0;
+    }
+    chr->form.index = 0;
+    chr->form.chara = model;
+    chr->form.costume = BtlMember_GetActive(chr)->costume;
+    chr->form.cost = cost;
+    chr->form.partner = -1;
+    chr->form.kind = Port_ModGodTransformKind(god);  /* its transformation effect (god_<form>_transform_kind) */
+    chr->form.unk24 = 0xFF;
+    chr->form.unk28 = 0;
+    chr->form.variant = BtlMember_GetActiveGauge(chr)->variant;
+    chr->form.animChara = model;
+    chr->form.unk1C = model;
+    chr->form.voiceChara = model;
+    BtlAct_GodSetPending(chr, god);
+    BtlAct_SetQueue(chr, 0, 0xEC);
+    return 1;
+}
+#endif
+
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: the CPU and the mod's skills (cpu_* in mod_values.txt; cpu_skills = 0 turns it all off).
+   BtlAct_CpuThink runs every frame for each fighter the CPU plays (btl_ai_mgr.c: after the game's own AI has filled
+   the pad, before the fighter reads it). It picks what is worth using now and leaves it as a request that the
+   fighter's own input checks take (BtlAct_CheckSkillInput, BtlAct_CheckTransformInput), so it starts only where and
+   when a player's input would:
+     - forms: the strongest form it can take, ordinary or god, keeping cpu_stamina_reserve stamina, that lasts
+       long enough on its stamina to finish the opponent (BtlAct_CpuBestForm: a hungry form like God Super Saiyan only
+       when it can finish the job quickly, else a lighter one like Super Saiyan God). While a
+       transformation up refills both fighters' health (transform_up_heals), it does not transform while it is more
+       than cpu_heal_margin health percent ahead (the refill would help the opponent more), unless the opponent has
+       cpu_heal_ignore_above percent or more or is cpu_outpowered times stronger. The game's own AI no longer picks
+       its forms (it could step down from a god form).
+     - Ultra Instinct and Super Speed: switched on once it has their stamina and some to spare (Ultra Instinct keeps
+       cpu_ultra_instinct_reserve for its dodges).
+     - Kaioken: one level at a time while it is less than cpu_kaioken_power_target times as strong as the opponent,
+       as long as the health it costs leaves cpu_kaioken_keep_health of the maximum.
+   Below CPU level cpu_transform_min_level (1: at level 0) it takes no form at all. Forms and Kaioken wait for a safe
+   moment: the opponent further than cpu_safe_distance close ranges and not in a
+   technique, or stunned. How often it takes its chance goes with its CPU level (cpu_skill_chance_low .. _high,
+   rolled every cpu_think_frames), with cpu_skill_cooldown frames between two skills. It also changes the pad:
+     - low on stamina (cpu_rest_below) with the opponent away (cpu_rest_distance close ranges), it stands and
+       charges ki until cpu_rest_until (stamina comes back only when still). With full ki it only stands: charging
+       on would fill the Max Power gauge and spend a blast stock, its stamina. Hit out of it, it waits
+       cpu_rest_retry frames before it rests again;
+     - in the homing dash, near the opponent (cpu_dash_strike_distance), it may strike: L2 + triangle with a
+       direction (cpu_dash_strike_chance_*), holding triangle up to cpu_dash_strike_hold frames to charge it;
+     - with a beam ready and the opponent far (cpu_beam_charge_distance) or stunned, it may hold triangle to charge
+       it (cpu_beam_charge_chance_*), and lets it go once the opponent comes closer. */
+extern f32 Port_ModValue(const char *key, f32 def);
+extern f32 Port_ModStaminaDrain(s32 chara, s32 god);
+extern u32 Rand_Range(u32 n);
+extern s32 BtlCharApi_GetHp(s32 objId);
+extern s32 BtlCharApi_GetHpMax(s32 objId);
+extern s32 BtlCharApi_GetStunTimer(s32 objId);
+extern s32 BtlCharApi_IsInTechnique(s32 objId);
+extern s32 BtlCharApi_IsInputInjected(s32 objId);
+extern f32 BtlCharApi_GetCloseRange(s32 objId);
+extern BtlActJChr *BtlChar_Get(s32 side);
+extern s32 BtlMember_StaminaPercent(BtlActJChr *chr);
+extern s32 BtlMember_StaminaUnits(BtlActJChr *chr, s32 points);
+extern s32 BtlMember_HasStamina(BtlActJChr *chr, s32 points);
+extern f32 BtlMember_PowerLevel(BtlActJChr *chr);
+extern f32 BtlMember_FormLevel(BtlActJChr *chr);
+extern f32 BtlMember_FormPowerOf(s32 chara, s32 god);
+extern s32 BtlMember_TransformHeals(s32 side);
+extern s32 BtlMember_UltraInstinctStamina(BtlActJChr *chr, s32 activate);
+extern s32 BtlAct_KaiokenNextHealth(BtlActJChr *chr);
+extern s32 BtlAct_ModeOn(BtlActJChr *chr, s32 bit);
+extern s32 BtlAct_HasModeAbility(BtlActJChr *chr, s32 which);
+extern s32 BtlMember_IsKiFull(BtlActJChr *chr);
+extern f32 powf(f32 x, f32 y);
+
+#define BTL_CPU_KAIOKEN 1
+#define BTL_CPU_UI 2
+#define BTL_CPU_SPEED 3
+#define BTL_CPU_GOD 4  /* + 0..3: Super Saiyan God, God Super Saiyan, Rose, Super Saiyan 4 Limit Breaker */
+#define BTL_CPU_FORM 8 /* + the transformation slot 0..3 */
+
+typedef struct BtlCpuSide {
+    s32 want;       /* the request for the input checks (BTL_CPU_*), 0 none */
+    s32 willing;    /* rolled every cpu_think_frames: whether it takes its chance now */
+    s32 timer;      /* frames to the next roll */
+    s32 cooldown;   /* frames before the next skill */
+    s32 resting;    /* standing and charging ki to get stamina back */
+    s32 restWait;   /* frames before it may rest again (it was hit out of it) */
+    s32 dash;       /* the homing dash: 0 not decided, -1 no strike, 1 a strike, 2 triangle released (press next) */
+    s32 strikeHold; /* frames triangle stays held after a dash strike */
+    s32 beam;       /* a beam ready to fire: 0 not decided, 1 charge it, -1 not */
+} BtlCpuSide;
+
+static BtlCpuSide sBtlCpu[2];
+
+/* A battle (re)starts the AI (btl_ai_mgr.c). */
+void BtlAct_CpuReset(void) {
+    BtlCpuSide zero = { 0 };
+
+    sBtlCpu[0] = zero;
+    sBtlCpu[1] = zero;
+}
+
+/* A CPU value between its _low (CPU level 0) and _high (the highest level, 29) settings. */
+static f32 BtlAct_CpuByLevel(s32 level, const char *lo, f32 dlo, const char *hi, f32 dhi) {
+    f32 a = Port_ModValue(lo, dlo);
+    f32 t = level <= 0 ? 0.0f : level >= 29 ? 1.0f : (f32)level / 29.0f;
+
+    return a + (Port_ModValue(hi, dhi) - a) * t;
+}
+
+/* A roll against a percent chance that goes with the CPU level. */
+static s32 BtlAct_CpuChance(s32 level, const char *lo, f32 dlo, const char *hi, f32 dhi) {
+    return (f32)Rand_Range(100) < BtlAct_CpuByLevel(level, lo, dlo, hi, dhi);
+}
+
+/* The model god form `god` shows for the fighter when it may take it now (what BtlAct_QueueGodForm checks, but the
+   cost), else -1. */
+static s32 BtlAct_CpuGodModel(BtlActJChr *chr, s32 god) {
+    s32 model = Port_ModGodModel(BtlMember_GetActive(chr)->chara, god);
+
+    if (model < 0 || BtlAct_GodActive(chr) == god) {
+        return -1;
+    }
+    if (!BtlChar_TestFlag(chr, 0x10F) && chr->form.allowed == 0) {
+        return -1;
+    }
+    if (BtlMember_HasAbility(chr, 0x5E) || BtlChar_TestFlag(chr, 0xAF) || BtlChar_TestMemberUnk70(chr)) {
+        return -1;
+    }
+    if (!BattleSide_IsCharaUsable(chr->player, model) || !BtlMember_GodAllowed(chr, model, god)) {
+        return -1;
+    }
+    return model;
+}
+
+/* Choosing a form (BtlAct_CpuBestForm): what the fighter knows of the fight. */
+typedef struct BtlCpuForms {
+    f32 now;      /* power level of the form it is in */
+    f32 oppPower; /* the opponent's (Kaioken included) */
+    f32 oppHp;    /* the opponent's health after the transformation, 0..1 (1 when it refills both) */
+    f32 stamina;  /* its stamina, 0..100 */
+    f32 full;     /* blast gauge units of 100 stamina */
+    s32 reserve;  /* blast gauge units of cpu_stamina_reserve */
+    f32 bestPower; /* the strongest form that lasts until the opponent is finished */
+    f32 bestDrain;
+    s32 best;
+    f32 fallbackDamage; /* else: the most damage done before the stamina runs out */
+    s32 fallback;
+} BtlCpuForms;
+
+/* Weighs one form: `pick` (BTL_CPU_*), power level `pl`, `drain` stamina a second, `cost` blast gauge units. It
+   lasts (stamina left after paying) / drain seconds; finishing the opponent takes its health times cpu_ko_seconds
+   (a whole health bar at equal power) divided by the damage multiplier its power gives (power_exponent, within
+   damage_min / max_multiplier), times cpu_finish_margin. */
+static void BtlAct_CpuWeighForm(BtlCpuForms *f, s32 pick, f32 pl, f32 drain, s32 cost) {
+    f32 ko = Port_ModValue("cpu_ko_seconds", 90.0f);
+    f32 left = f->stamina - (f32)cost * 100.0f / f->full;
+    f32 dm = f->oppPower > 0.0f ? powf(pl / f->oppPower, Port_ModValue("power_exponent", 0.25f)) : 1.0f;
+    f32 last;
+    f32 need;
+
+    if (pl <= f->now) {
+        return;
+    }
+    if (dm < Port_ModValue("damage_min_multiplier", 0.1f)) {
+        dm = Port_ModValue("damage_min_multiplier", 0.1f);
+    }
+    if (dm > Port_ModValue("damage_max_multiplier", 10.0f)) {
+        dm = Port_ModValue("damage_max_multiplier", 10.0f);
+    }
+    last = drain > 0.0f ? left / drain : 1e30f;
+    need = f->oppHp * ko / dm * Port_ModValue("cpu_finish_margin", 1.25f);
+    if (ko <= 0.0f || last >= need) {
+        if (pl > f->bestPower || (pl == f->bestPower && drain < f->bestDrain)) {
+            f->bestPower = pl;
+            f->bestDrain = drain;
+            f->best = pick;
+        }
+    } else if (last >= Port_ModValue("cpu_form_min_seconds", 20.0f) && dm * last > f->fallbackDamage) {
+        f->fallbackDamage = dm * last;
+        f->fallback = pick;
+    }
+}
+
+/* The form the fighter takes now, stronger than the one it is in and paid with cpu_stamina_reserve stamina to spare:
+   the strongest that lasts on its stamina until the opponent is finished (of two as strong, the one that drains
+   less); if none does, the one that does the most damage before its stamina runs out, when that lasts at least
+   cpu_form_min_seconds. BTL_CPU_GOD + n or BTL_CPU_FORM + slot; 0 none. */
+static s32 BtlAct_CpuBestForm(BtlActJChr *chr, s32 side) {
+    BtlCpuForms f;
+    s32 oppMax = BtlCharApi_GetHpMax(side ^ 1);
+    s32 i;
+
+    f.now = BtlMember_FormLevel(chr);
+    f.oppPower = BtlMember_PowerLevel(BtlChar_Get(side ^ 1));
+    f.oppHp = BtlMember_TransformHeals(side) || oppMax <= 0 ? 1.0f : (f32)BtlCharApi_GetHp(side ^ 1) / (f32)oppMax;
+    f.stamina = (f32)BtlMember_StaminaPercent(chr);
+    f.full = (f32)BtlMember_StaminaUnits(chr, 100);
+    f.reserve = BtlMember_StaminaUnits(chr, (s32)Port_ModValue("cpu_stamina_reserve", 20.0f));
+    f.bestPower = 0.0f;
+    f.bestDrain = 0.0f;
+    f.best = 0;
+    f.fallbackDamage = 0.0f;
+    f.fallback = 0;
+    if (f.full <= 0.0f) {
+        return 0;
+    }
+    for (i = 0; i < 4; i++) {
+        s32 cost = BtlParam_GetSlotCost(chr, i);
+        s32 chara = BtlParam_GetSlotId(chr, i);
+
+        if (BtlAct_CanTransform(chr, i, 1, !BtlChar_TestFlag(chr, 0x10F)) && BtlMember_HasBlast(chr, cost + f.reserve)) {
+            BtlAct_CpuWeighForm(&f, BTL_CPU_FORM + i, BtlMember_FormPowerOf(chara, 0), Port_ModStaminaDrain(chara, 0),
+                                cost);
+        }
+    }
+    for (i = 1; i <= 4; i++) {
+        s32 model = BtlAct_CpuGodModel(chr, i);
+        s32 cost = Port_ModGodCost(i) * 100000;
+
+        if (model >= 0 && BtlMember_HasBlast(chr, cost + f.reserve)) {
+            BtlAct_CpuWeighForm(&f, BTL_CPU_GOD + i - 1, BtlMember_FormPowerOf(model, i), Port_ModStaminaDrain(model, i),
+                                cost);
+        }
+    }
+    return f.best != 0 ? f.best : f.fallback;
+}
+
+/* Whether transforming up pays off now: always, unless it refills both fighters' health while the CPU is ahead on
+   health (cpu_heal_margin), with an opponent that has health to gain (cpu_heal_ignore_above) and is not far stronger
+   (cpu_outpowered). */
+static s32 BtlAct_CpuFormPaysOff(BtlActJChr *chr, s32 side) {
+    s32 max = BtlCharApi_GetHpMax(side);
+    s32 oppMax = BtlCharApi_GetHpMax(side ^ 1);
+    f32 own;
+    f32 opp;
+
+    if (!BtlMember_TransformHeals(side) || max <= 0 || oppMax <= 0) {
+        return 1;
+    }
+    own = 100.0f * (f32)BtlCharApi_GetHp(side) / (f32)max;
+    opp = 100.0f * (f32)BtlCharApi_GetHp(side ^ 1) / (f32)oppMax;
+    if (own - opp <= Port_ModValue("cpu_heal_margin", 15.0f)) {
+        return 1;  /* not ahead on health: the refill helps it at least as much */
+    }
+    if (opp >= Port_ModValue("cpu_heal_ignore_above", 90.0f)) {
+        return 1;  /* the opponent has little to gain */
+    }
+    return BtlMember_PowerLevel(BtlChar_Get(side ^ 1)) > BtlMember_PowerLevel(chr) * Port_ModValue("cpu_outpowered", 4.0f);
+}
+
+/* Whether one more Kaioken level pays off: the opponent still stronger than cpu_kaioken_power_target times its own
+   power, the health it costs leaving cpu_kaioken_keep_health of the maximum, the stamina with cpu_stamina_reserve to
+   spare. */
+static s32 BtlAct_CpuKaiokenPaysOff(BtlActJChr *chr, s32 side) {
+    s32 cost = BtlAct_KaiokenNextHealth(chr);
+    s32 hp = BtlCharApi_GetHp(side);
+    s32 max = BtlCharApi_GetHpMax(side);
+
+    if (cost < 0 || max <= 0 || (f32)(hp - cost) < (f32)max * Port_ModValue("cpu_kaioken_keep_health", 0.5f)) {
+        return 0;
+    }
+    if (!BtlMember_HasStamina(chr, (s32)(Port_ModValue("kaioken_stamina", 5.0f) +
+                                         Port_ModValue("cpu_stamina_reserve", 20.0f)))) {
+        return 0;
+    }
+    return BtlMember_PowerLevel(chr) <
+           BtlMember_PowerLevel(BtlChar_Get(side ^ 1)) * Port_ModValue("cpu_kaioken_power_target", 2.0f);
+}
+
+/* One of the dash strikes that are on (dash_strike_*: 0x5E..0x66), at random: its direction bit (0 none); -1 when
+   none is on. */
+static s32 BtlAct_CpuStrikeDir(void) {
+    static const char *const key[5] = { "dash_strike_neutral", "dash_strike_up", "dash_strike_down", "dash_strike_left",
+                                        "dash_strike_right" };
+    static const f32 def[5] = { 96.0f, 94.0f, 95.0f, 100.0f, 102.0f };
+    static const s32 bit[5] = { 0, 0x10, 0x20, 0x40, 0x80 };
+    s32 list[5];
+    s32 n = 0;
+    s32 i;
+
+    for (i = 0; i < 5; i++) {
+        s32 v = (s32)Port_ModValue(key[i], def[i]);
+
+        if (v >= 0x5E && v <= 0x66) {
+            list[n++] = bit[i];
+        }
+    }
+    return n > 0 ? list[Rand_Range((u32)n)] : -1;
+}
+
+/* Every frame for the fighter of side `side` the CPU plays (CPU level `level`, `dist` from the opponent), with the
+   pad the game's own AI has filled (battle button bits, stick). */
+void BtlAct_CpuThink(s32 side, s32 level, f32 dist, u32 *buttons, f32 *x, f32 *y) {
+    BtlCpuSide *c = &sBtlCpu[side & 1];
+    BtlActJChr *chr = BtlChar_Get(side);
+    BtlActJChr *opp = BtlChar_Get(side ^ 1);
+    s32 reserve;
+    s32 stamina;
+    s32 oppDown;
+    s32 oppBusy;
+    s32 safe;
+    f32 range;
+
+    c->want = 0;
+    if (chr == NULL || opp == NULL || Port_ModValue("cpu_skills", 1.0f) == 0.0f) {
+        return;
+    }
+    range = BtlCharApi_GetCloseRange(side);
+    reserve = (s32)Port_ModValue("cpu_stamina_reserve", 20.0f);
+    stamina = BtlMember_StaminaPercent(chr);
+    oppDown = BtlCharApi_GetStunTimer(side ^ 1) > 0;
+    oppBusy = BtlCharApi_IsInTechnique(side ^ 1);
+    safe = oppDown || (!oppBusy && dist > range * Port_ModValue("cpu_safe_distance", 3.0f));
+    if (--c->timer <= 0) {
+        c->timer = (s32)Port_ModValue("cpu_think_frames", 20.0f);
+        c->willing = BtlAct_CpuChance(level, "cpu_skill_chance_low", 30.0f, "cpu_skill_chance_high", 100.0f);
+    }
+    if (c->cooldown > 0) {
+        c->cooldown--;
+    }
+
+    /* a form or a skill, for the input checks */
+    if (c->willing && c->cooldown == 0 && BtlChar_IsFree(chr)) {
+        s32 form = level >= (s32)Port_ModValue("cpu_transform_min_level", 1.0f) ? BtlAct_CpuBestForm(chr, side) : 0;
+
+        if (form != 0 && BtlAct_CpuFormPaysOff(chr, side)) {
+            c->want = safe ? form : 0;  /* it waits for the moment rather than spend the stamina on something else */
+        } else if (BtlAct_HasModeAbility(chr, 1) && !BtlAct_ModeOn(chr, 0x200) &&
+                   BtlMember_HasStamina(chr, BtlMember_UltraInstinctStamina(chr, 1) +
+                                             (s32)Port_ModValue("cpu_ultra_instinct_reserve", 30.0f))) {
+            c->want = BTL_CPU_UI;
+        } else if (BtlAct_HasModeAbility(chr, 2) && !BtlAct_ModeOn(chr, 0x400) &&
+                   BtlMember_HasStamina(chr, (s32)Port_ModValue("super_speed_activate_stamina", 10.0f) + reserve)) {
+            c->want = BTL_CPU_SPEED;
+        } else if (safe && BtlAct_HasModeAbility(chr, 0) && BtlAct_CpuKaiokenPaysOff(chr, side)) {
+            c->want = BTL_CPU_KAIOKEN;
+        }
+    }
+
+    /* resting: stamina comes back only while still (stamina_recover_still) */
+    if (c->restWait > 0) {
+        c->restWait--;
+    }
+    if (c->resting) {
+        if (BtlCharApi_GetStunTimer(side) > 0) {
+            c->resting = 0;
+            c->restWait = (s32)Port_ModValue("cpu_rest_retry", 90.0f);  /* hit out of it */
+        } else if (stamina >= (s32)Port_ModValue("cpu_rest_until", 60.0f) || oppBusy ||
+                   dist < range * Port_ModValue("cpu_rest_distance", 6.0f) * 0.75f) {
+            c->resting = 0;
+        }
+    } else if (c->restWait == 0 && Port_ModValue("stamina_recover_still", 1.0f) != 0.0f &&
+               stamina < (s32)Port_ModValue("cpu_rest_below", 25.0f) && !oppBusy && BtlChar_IsFree(chr) &&
+               dist > range * Port_ModValue("cpu_rest_distance", 6.0f)) {
+        c->resting = 1;
+    }
+    if (c->resting) {
+        *buttons = BtlMember_IsKiFull(chr) ? 0 : 0x200;  /* L2 alone: it stands and charges ki; full: only stands */
+        *x = 0.0f;
+        *y = 0.0f;
+    }
+
+    /* a dash strike out of the homing dash (action 0x19, btl_act_d.c: L2 held, triangle pressed) */
+    if (c->strikeHold > 0) {
+        c->strikeHold--;
+        *buttons |= 0x4;  /* triangle held: the strike charges */
+    } else if (BtlAct_GetCurrent(chr) == 0x19) {
+        if (c->dash == 0) {
+            c->dash = BtlAct_CpuChance(level, "cpu_dash_strike_chance_low", 10.0f, "cpu_dash_strike_chance_high", 60.0f)
+                          ? 1 : -1;
+        }
+        if (c->dash > 0 && dist < range * Port_ModValue("cpu_dash_strike_distance", 4.0f)) {
+            if (c->dash == 1) {
+                *buttons = (*buttons & ~0x4u) | 0x200;  /* triangle up first: the strike wants a fresh press */
+                c->dash = 2;
+            } else {
+                s32 dir = BtlAct_CpuStrikeDir();
+
+                if (dir >= 0) {
+                    *buttons = (*buttons & ~0xF4u) | 0x204 | (u32)dir;
+                    *x = 0.0f;
+                    *y = 0.0f;
+                    c->strikeHold = (s32)Rand_Range((u32)Port_ModValue("cpu_dash_strike_hold", 20.0f) + 1);
+                }
+                c->dash = -1;
+            }
+        }
+    } else {
+        c->dash = 0;
+    }
+
+    /* a beam ready to fire (flag 0xA7) charges while triangle stays held (btl_act_f.c: BtlSuper_HoldCharge) */
+    if (BtlChar_TestFlag(chr, 0xA7) && BtlCharApi_IsInTechnique(side)) {
+        if (c->beam == 0) {
+            c->beam = BtlAct_CpuChance(level, "cpu_beam_charge_chance_low", 20.0f, "cpu_beam_charge_chance_high", 90.0f)
+                          ? 1 : -1;
+        }
+        if (c->beam > 0 && (oppDown || dist > range * Port_ModValue("cpu_beam_charge_distance", 5.0f))) {
+            *buttons |= 0x4;
+        } else {
+            c->beam = -1;  /* the opponent came closer: it fires */
+        }
+    } else {
+        c->beam = 0;
+    }
+}
+
+/* The CPU's request for the fighter, taken (cleared) when it is of the kind asked: `forms` 1 a form, 0 a skill
+   (Kaioken, Ultra Instinct, Super Speed). 0 none. */
+static s32 BtlAct_CpuTake(BtlActJChr *chr, s32 forms) {
+    BtlCpuSide *c = &sBtlCpu[chr->player & 1];
+    s32 want = c->want;
+
+    if (want == 0 || (want >= BTL_CPU_GOD) != (forms != 0)) {
+        return 0;
+    }
+    c->want = 0;
+    c->cooldown = (s32)Port_ModValue("cpu_skill_cooldown", 60.0f);
+    return want;
+}
+
+/* Whether the CPU plays the fighter and picks its forms (BtlAct_CpuThink), not the game's own AI. */
+static s32 BtlAct_CpuPlaysForms(BtlActJChr *chr) {
+    return Port_ModValue("cpu_skills", 1.0f) != 0.0f && BtlCharApi_IsInputInjected(chr->player);
+}
+#endif
 
 /*
  * Transformation inputs: 99 (R3 tapped, no direction) = the character's default index, 100..103 (R3 tapped with
@@ -237,6 +736,41 @@ s32 BtlAct_CheckTransformInput(BtlActJChr *chr) {
     s32 index = -1;
     s32 def = BtlParam_GetUnkAC(chr);
 
+#ifdef PORT
+    {
+        s32 cpu = BtlAct_CpuTake(chr, 1);  /* Mod "Ultra Instinct" v56: the CPU's form (BtlAct_CpuThink) */
+
+        if (cpu >= BTL_CPU_FORM) {
+            return BtlAct_CanTransform(chr, cpu - BTL_CPU_FORM, 1, !BtlChar_TestFlag(chr, 0x10F)) ?
+                   BtlAct_QueueTransform(chr, cpu - BTL_CPU_FORM) : 0;
+        }
+        if (cpu >= BTL_CPU_GOD) {
+            return BtlAct_QueueGodForm(chr, cpu - BTL_CPU_GOD + 1);
+        }
+        if (BtlAct_CpuPlaysForms(chr)) {
+            return 0;  /* not the game's own AI's form */
+        }
+    }
+#endif
+#ifdef PORT
+    if (BtlInput_IsHeld(chr, 0x200)) {  /* L2 held: the god forms */
+        s32 god = 0;
+
+        if (BtlInput_TestAction(chr, 0x64, 1)) {
+            god = 1;
+        }
+        if (BtlInput_TestAction(chr, 0x65, 1)) {
+            god = 2;
+        }
+        if (BtlInput_TestAction(chr, 0x66, 1)) {
+            god = 3;
+        }
+        if (BtlInput_TestAction(chr, 0x67, 1)) {
+            god = 4;  /* Super Saiyan 4 Limit Breaker */
+        }
+        return god ? BtlAct_QueueGodForm(chr, god) : 0;
+    }
+#endif
     if (BtlInput_TestAction(chr, 0x63, 1)) {
         index = def;
     }
@@ -261,6 +795,13 @@ s32 BtlAct_CheckTransformInput(BtlActJChr *chr) {
     if (BtlAct_CanTransform(chr, index, 1, !BtlChar_TestFlag(chr, 0x10F))) {
         return BtlAct_QueueTransform(chr, index);
     }
+#ifdef PORT
+    if (BtlAct_CanTransform(chr, index, 0, !BtlChar_TestFlag(chr, 0x10F))) {
+        extern void HudCombo_ShowModeText(s32 side, s32 kind, s32 value);
+
+        HudCombo_ShowModeText(chr->player, 9, 0);  /* Mod "Ultra Instinct" v56: only the stamina was missing */
+    }
+#endif
     return 0;
 }
 
@@ -273,6 +814,9 @@ s32 BtlAct_QueueTransform(BtlActJChr *chr, s32 index) {
     s32 unk24 = BtlParam_GetSlotA8(chr, index);
     s32 action;
 
+#ifdef PORT
+    BtlAct_GodSetPending(chr, 0);
+#endif
     chr->form.index = index;
     chr->form.chara = chara;
     chr->form.costume = BtlMember_GetActive(chr)->costume;
@@ -678,6 +1222,18 @@ s32 BtlAct_CanUseSkill(BtlActJChr *chr, u32 slot) {
     return 1;
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: Kaioken for every adult Goku on L2 + down + circle (btl_act_h_b.c). */
+extern s32 BtlAct_IsGoku(BtlActJChr *chr);
+extern s32 BtlAct_HasModeAbility(BtlActJChr *chr, s32 which);
+extern void BtlAct_ToggleMode(BtlActJChr *chr, s32 bit);
+extern void BtlAct_KaiokenQueue(BtlActJChr *chr);
+extern void BtlAct_KaiokenUnqueue(BtlActJChr *chr);
+extern s32 BtlMember_HasStamina(BtlActJChr *chr, s32 points);
+extern f32 Port_ModValue(const char *key, f32 def);
+extern s32 BtlSuper_GetType(BtlActJChr *chr, s32 slot);
+#endif
+
 /*
  * Skill inputs: 113 / 114 (charge + guard, neutral / up, or flags 0x120 / 0x121) = slot 0 / 1. During an
  * animation with flag 0x10 only skills with flag 8 are accepted.
@@ -685,6 +1241,50 @@ s32 BtlAct_CanUseSkill(BtlActJChr *chr, u32 slot) {
 s32 BtlAct_CheckSkillInput(BtlActJChr *chr) {
     s32 slot = -1;
 
+#ifdef PORT
+    {
+        s32 cpu = BtlAct_CpuTake(chr, 0);  /* Mod "Ultra Instinct" v56: the CPU's skill (BtlAct_CpuThink) */
+
+        if (cpu == BTL_CPU_KAIOKEN && BtlAct_HasModeAbility(chr, 0) && BtlChar_IsFree(chr) &&
+            BtlMember_HasStamina(chr, (s32)Port_ModValue("kaioken_stamina", 5.0f))) {
+            BtlAct_KaiokenQueue(chr);
+            BtlAct_SetQueue(chr, 0, 0xFE);  /* as L2 + down + circle */
+            return 1;
+        }
+        if ((cpu == BTL_CPU_UI || cpu == BTL_CPU_SPEED) && BtlChar_IsFree(chr) &&
+            !BtlAct_ModeOn(chr, cpu == BTL_CPU_UI ? 0x200 : 0x400)) {
+            BtlAct_ToggleMode(chr, cpu == BTL_CPU_UI ? 0x200 : 0x400);
+        }
+    }
+#endif
+#ifdef PORT
+    if (BtlInput_IsHeld(chr, 0x200) && BtlInput_IsPressed(chr, 0x4000) && BtlAct_HasModeAbility(chr, 0)) {
+        if (!BtlChar_IsFree(chr) || !BtlMember_HasStamina(chr, (s32)Port_ModValue("kaioken_stamina", 5.0f))) {
+            return 0;
+        }
+        BtlAct_KaiokenQueue(chr);
+        BtlAct_SetQueue(chr, 0, 0xFE);  /* the next Kaioken level */
+        return 1;
+    }
+    if (BtlInput_TestAction(chr, 0x71, 1) && BtlInput_IsHeld(chr, 0x20) && BtlAct_HasModeAbility(chr, 0)) {
+        if (!BtlChar_IsFree(chr) || !BtlMember_HasStamina(chr, (s32)Port_ModValue("kaioken_stamina", 5.0f))) {
+            return 0;
+        }
+        BtlAct_KaiokenQueue(chr);
+        BtlAct_SetQueue(chr, 0, 0xFE);  /* the plain skill action of slot 1 */
+        return 1;
+    }
+    if (BtlInput_TestAction(chr, 0x71, 1) && BtlInput_IsHeld(chr, 0xC0)) {
+        s32 ui = BtlInput_IsHeld(chr, 0x80);  /* right: Ultra Instinct; left: Super Speed */
+
+        if (BtlAct_HasModeAbility(chr, ui ? 1 : 2)) {
+            if (BtlChar_IsFree(chr)) {
+                BtlAct_ToggleMode(chr, ui ? 0x200 : 0x400);
+            }
+            return 0;
+        }
+    }
+#endif
     if (BtlInput_TestAction(chr, 0x71, 1)) {
         slot = 0;
     }
@@ -703,6 +1303,9 @@ s32 BtlAct_CheckSkillInput(BtlActJChr *chr) {
     if ((BtlAnim_GetFlags(BtlAnim_GetId(chr)) & 0x10) && !(BtlSkill_GetFlags(chr, slot) & 8)) {
         return 0;
     }
+#ifdef PORT
+    BtlAct_KaiokenUnqueue(chr);
+#endif
     BtlAct_SetQueue(chr, 0, BtlAct_GetSkillAction(chr, slot));
     return 1;
 }

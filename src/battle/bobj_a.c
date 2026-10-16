@@ -355,6 +355,14 @@ void BtlObjAnim_SamplePosRot(BobjTrack *trk, Vec4 *pos, Quat *rot, u16 *cursor, 
     }
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: whether the object has motion `anim` of the common table (some, like the sway motions
+   0x193..0x195, exist only for some characters; a missing one is NULL, see BtlObjAnim_Load). */
+s32 BtlObjAnim_HasMotion(BobjObj *obj, s32 anim) {
+    return anim >= 0 && anim < BOBJ_ANIM_MAX && obj->mdl.anims[anim] != NULL;
+}
+#endif
+
 /* Returns motion `anim` of an object: ids below 0x19E are decompressed into buf, the others (the model's own
    motions, which follow in the same table) are returned in place. */
 BobjAnim *BtlObjAnim_Load(BobjObj *obj, void *buf, s32 anim, s32 *size) {

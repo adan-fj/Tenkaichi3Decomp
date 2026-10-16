@@ -144,6 +144,26 @@ s32 BtlCharApi_ObjGetParamFlags(s32 objId) {
     return 0;
 }
 
+#ifdef PORT
+extern s32 BtlAct_GodActive(BtlCapiChr *chr);  /* Mod "Ultra Instinct" v56 */
+extern s32 Port_ModGodAuraType(s32 form);
+
+/* The god form of the fighter with object id `objId` (0: none), for its aura and glow (eft_n.c, eft_q.c). */
+s32 BtlCharApi_GodForm(s32 objId) {
+    BtlCapiChr *chr = BtlChar_FindByObjId(objId);
+
+    return chr != NULL ? BtlAct_GodActive(chr) : 0;
+}
+
+extern s32 BtlAct_GodPending(BtlCapiChr *chr);
+
+/* The god form the transformation of the fighter with object id `objId` brings (0: none; eft_ab_b.c). */
+s32 BtlCharApi_GodTarget(s32 objId) {
+    BtlCapiChr *chr = BtlChar_FindByObjId(objId);
+
+    return chr != NULL ? BtlAct_GodPending(chr) : 0;
+}
+#endif
 /* Aura type of the character: 3 while object flag 0x40000 is set, else the parameter byte +3 (for a fighter: as
    replaced by its abilities, BtlParam_GetAuraKind). */
 s32 BtlCharApi_GetAuraType(s32 objId) {
@@ -154,6 +174,14 @@ s32 BtlCharApi_GetAuraType(s32 objId) {
         if (BtlChar_GetObj(chr)->u.flags & 0x40000) {
             return 3;
         }
+#ifdef PORT
+        if (BtlChar_TestFlag(chr, 0x98)) {
+            return 3;  /* Mod "Ultra Instinct" v56: Kaioken's red aura */
+        }
+        if (BtlAct_GodActive(chr)) {
+            return Port_ModGodAuraType(BtlAct_GodActive(chr));  /* a god form's: red, light blue, pink */
+        }
+#endif
         return BtlParam_GetAuraKind(chr);
     }
     obj = BtlObj_Get(objId);

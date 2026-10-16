@@ -385,7 +385,7 @@ static void Port_LoadGameData(void) {
 /* (between the GS registers at 0x12000000 and the program at 0x20000000: see the note at STACK_BASE) */
 #define LOW_ARENA_BASE 0x13000000u
 #define LOW_ARENA_SIZE 0x0C000000u /* address space only: pages are taken as they are first used */
-enum { LOW_SIZES = 256 };
+enum { LOW_SIZES = 1024 }; /* Mod "Ultra Instinct" v56: 256 before */
 PORT_HOST static uint8_t *sLowArena = NULL; /* where the region is: fixed once it is taken, not game state */
 static uint8_t *sLowNext;
 #ifdef _WIN32
@@ -399,6 +399,15 @@ static volatile int sLowLock;
 /* For saving and restoring the game's state (port/src/gs/state.c): the port's own memory that belongs to it. The
    blocks of Port_LowAlloc hold what the game was handed by address (file handles, sound buffers), and the
    allocator's own variables say which of them are in use. Also where the game thread's stack ends. */
+/* Mod "Ultra Instinct" v56: the bytes of the region handed out so far (the memory log of the mod, plat_stub.c). */
+uint32_t Port_LowUsed(void) {
+#if defined(__x86_64__)
+    return sLowArena != NULL ? (uint32_t)(sLowNext - sLowArena) : 0;
+#else
+    return 0;
+#endif
+}
+
 uint32_t Port_LowRegionSize(void) {
 #if defined(__x86_64__)
     return LOW_ARENA_SIZE;
@@ -566,6 +575,12 @@ void *Port_LowAlloc(size_t size) {
 
     if (total > 4096) {
         total = (total + 4095) & ~(size_t)4095;
+    }
+    if (total > 0x10000) { /* Mod "Ultra Instinct" v56: in classes of an eighth of the power of two below it, so that a freed
+                              block fits the next file of about its size (a fighter's model, its effects) */
+        size_t step = ((size_t)1 << (63 - __builtin_clzll((unsigned long long)total))) >> 3;
+
+        total = (total + step - 1) & ~(step - 1);
     }
     while (__sync_lock_test_and_set(&sLowLock, 1)) {
     }

@@ -1736,6 +1736,23 @@ void EftShotChar_Init(EftTask *task, s32 *arg) {
             EftShot_CreateSlotTask(*arg, i);
         }
     }
+#ifdef PORT
+    {
+        /* Mod "Ultra Instinct" v56: shot slot 5 (the sixth of the character's six tasks), Kaioken's burst: sub-entries 8 and 9
+           of the fighter's effect sub-pack (btl_char_fx.c); without them the slot is cleared and stays empty */
+        extern s32 *BtlCharApi_GetPlayerObjUnk58(s32 player);
+        extern void EftShot_KaiokenParam(void *p, void *d);
+        s32 *base = BtlCharApi_GetPlayerObjUnk58(*arg);
+
+        if (base != NULL && base[0] >= 10 && base[10] - base[9] > 0x40 && base[11] - base[10] >= 0x74 &&
+            EftShot_InitSlot(*arg, 5, (u8 *)base + ((u32)base[9] >> 2 << 2))) {
+            EftShot_KaiokenParam((u8 *)&gEftShot->chr[*arg] + 0x1E0 + 5 * 0x8C, (u8 *)base + ((u32)base[10] >> 2 << 2));
+            EftShot_CreateSlotTask(*arg, 5);
+        } else {
+            EftShot_InitSlot(*arg, 5, NULL);
+        }
+    }
+#endif
 }
 
 /* Character task term callback: empties the character's pool. */

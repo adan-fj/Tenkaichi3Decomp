@@ -495,6 +495,35 @@ u16 *BtlText_FindEntry(s32 n) {
     return ret;
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: draws `str` as BtlText_DrawEntryName draws an entry's name (the mod's banners, hud_c_b.c). */
+void BtlText_DrawString(s32 x, s32 y, u16 *str, s32 align, f32 alpha) {
+    s32 font = Font_GetCmdCount();
+
+    Font_PushStyle();
+    Font_SetFlags(1);
+    Font_SetScale(0.9f);
+    Font_SetScaleXY(0.95f, 1.0f);
+    Font_SetColorRGBA(0xFF, 0xFF, 0xFF, (u8)(u32)(alpha * 128.0f));
+    Font_SetShadowMode(2);
+    Font_SetShadowColorRGBA(0x20, 0x20, 0xFF, (u8)(u32)(alpha * 64.0f));
+    switch (align) {
+    case 0:
+        Font_SetAlign(0);
+        break;
+    case 1:
+        Font_SetAlign(2);
+        break;
+    default:
+        Font_SetAlign(1);
+        break;
+    }
+    Font_PrintAt(x, y, str);
+    Font_PopStyle();
+    Font_Flush(font);
+}
+#endif
+
 /* Draws the name of entry n at (x, y); align 0 / 1 / other picks the font alignment 0 / 2 / 1. */
 void BtlText_DrawEntryName(s32 x, s32 y, s32 n, s32 align, f32 alpha) {
     u16 *str = BtlText_FindEntry(n);

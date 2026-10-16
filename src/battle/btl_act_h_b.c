@@ -1751,6 +1751,207 @@ void BtlSkill_SetFlag(BtlActIChr *chr, s32 cls) {
     BtlChar_SetFlag(chr, flag);
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: Kaioken. Goku (Early)'s own Kaioken (skill 0x18, L2 + up + circle) and L2 + down + circle for every
+   adult Goku (btl_act_j.c) both come here. Each activation stacks one more level: x2, x3, x4, x10, x20, x50, x100,
+   x200, x500, x1000. It costs 5 stamina and a share of the maximum health (5% up to x4, 10% for x10 / x20, 15% for
+   x50 / x100, 20% above; it cannot kill), raises the power level by the multiplier (btl_char_member.c), the speed of
+   movement and attacks (btl_tech_b.c, btl_char_status_anim.c). Its strength works only through the power level,
+   compressed like a transformation (the square root of the multiplier, within the overall limit), not through the
+   game's flat stat levels. It neither gives nor drains ki, charging is allowed (with the red aura of Kaioken) and it lasts until
+   the fighter changes form or member (BtlAct_EndFlag98). The level is kept in skillKiRate (the game's ki drain rate
+   of Kaioken, unused now); bit 0x100 there marks a Kaioken queued from L2 + down + circle. */
+#define BTL_KAIOKEN_MAX 10
+#define BTL_KAIOKEN_STAMINA ((s32)Port_ModValue("kaioken_stamina", 5.0f))
+#define BTL_ESCAPE_STAMINA ((s32)Port_ModValue("escape_stamina", 10.0f))
+extern f32 Port_ModValue(const char *key, f32 def);
+static const char *const sKaiokenMultKey[BTL_KAIOKEN_MAX + 1] = {
+    "", "kaioken_multiplier_1", "kaioken_multiplier_2", "kaioken_multiplier_3", "kaioken_multiplier_4",
+    "kaioken_multiplier_5", "kaioken_multiplier_6", "kaioken_multiplier_7", "kaioken_multiplier_8",
+    "kaioken_multiplier_9", "kaioken_multiplier_10"
+};
+static const char *const sKaiokenSpeedKey[BTL_KAIOKEN_MAX + 1] = {
+    "", "kaioken_speed_1", "kaioken_speed_2", "kaioken_speed_3", "kaioken_speed_4", "kaioken_speed_5",
+    "kaioken_speed_6", "kaioken_speed_7", "kaioken_speed_8", "kaioken_speed_9", "kaioken_speed_10"
+};
+static const char *const sKaiokenHealthKey[BTL_KAIOKEN_MAX + 1] = {
+    "", "kaioken_health_1", "kaioken_health_2", "kaioken_health_3", "kaioken_health_4", "kaioken_health_5",
+    "kaioken_health_6", "kaioken_health_7", "kaioken_health_8", "kaioken_health_9", "kaioken_health_10"
+};
+static const f32 sKaiokenMult[BTL_KAIOKEN_MAX + 1] = { 1, 2, 3, 4, 10, 20, 50, 100, 200, 500, 1000 };
+static const f32 sKaiokenSpeed[BTL_KAIOKEN_MAX + 1] = {
+    1.0f, 1.15f, 1.24f, 1.3f, 1.5f, 1.65f, 1.85f, 2.0f, 2.15f, 2.35f, 2.5f
+};
+static const s32 sKaiokenHealth[BTL_KAIOKEN_MAX + 1] = {  /* health points (10000 = one bar) */
+    0, 2500, 2500, 2500, 5000, 5000, 7500, 7500, 10000, 10000, 10000
+};
+extern s32 BtlMember_PayStamina(BtlActIChr *chr, s32 points);
+extern s32 BtlMember_HasStamina(BtlActIChr *chr, s32 points);
+extern s32 BtlMember_GetActiveChara(BtlActIChr *chr);
+
+s32 BtlAct_KaiokenLevel(BtlActIChr *chr) {
+    s32 level;
+
+    if (!BtlChar_TestFlag(chr, 0x98)) {
+        return 0;
+    }
+    level = chr->skillKiRate & 0xFF;
+    return level > BTL_KAIOKEN_MAX ? BTL_KAIOKEN_MAX : level;
+}
+
+f32 BtlAct_KaiokenMult(BtlActIChr *chr) {
+    s32 level = BtlAct_KaiokenLevel(chr);
+
+    return level > 0 ? Port_ModValue(sKaiokenMultKey[level], sKaiokenMult[level]) : 1.0f;
+}
+
+f32 BtlAct_KaiokenSpeed(BtlActIChr *chr) {
+    s32 level = BtlAct_KaiokenLevel(chr);
+
+    return level > 0 ? Port_ModValue(sKaiokenSpeedKey[level], sKaiokenSpeed[level]) : 1.0f;
+}
+
+/* Goku (Early) .. Goku (GT) Super Saiyan 4: the adult Gokus and their forms. */
+s32 BtlAct_IsGoku(BtlActIChr *chr) {
+    s32 c = BtlMember_GetActiveChara(chr);
+
+    return c >= 0x00 && c <= 0x0A;
+}
+
+void BtlAct_KaiokenQueue(BtlActIChr *chr) {
+    chr->skillKiRate |= 0x900;
+}
+
+void BtlAct_KaiokenUnqueue(BtlActIChr *chr) {
+    chr->skillKiRate &= ~0x900;
+}
+
+/* Mod "Ultra Instinct" v56: Ultra Instinct (bit 0x200) and Super Speed (0x400) are modes switched on and off with L2 + right / left +
+   circle by the characters abilities.csv gives them (btl_act_j.c); BtlMember_HasAbility answers 0x7E / 0x7D from
+   them. They end with a new form or member (BtlAct_EndFlag98). Bit 0x800 marks a Kaioken started from L2 + down +
+   circle while its skill action runs: the aura's charge look (below) and the banner. */
+extern s32 Port_ModAbility(s32 chara, s32 which);
+extern void HudCombo_ShowModeText(s32 side, s32 kind, s32 value);
+extern s32 BtlMember_UltraInstinctStamina(void *chr, s32 activate);
+
+s32 BtlAct_ModeOn(BtlActIChr *chr, s32 bit) {
+    return (chr->skillKiRate & bit) != 0;
+}
+
+/* 0 Kaioken, 1 Ultra Instinct, 2 Super Speed (abilities.csv). */
+s32 BtlAct_HasModeAbility(BtlActIChr *chr, s32 which) {
+    return Port_ModAbility(BtlMember_GetActiveChara(chr), which);
+}
+
+void BtlAct_ToggleMode(BtlActIChr *chr, s32 bit) {
+    s32 ui = bit == 0x200;
+
+    if (chr->skillKiRate & bit) {
+        chr->skillKiRate &= ~bit;
+        HudCombo_ShowModeText(chr->player, ui ? 3 : 5, 0);
+        return;
+    }
+    if (!BtlMember_PayStamina(chr, ui ? BtlMember_UltraInstinctStamina(chr, 1)
+                                      : (s32)Port_ModValue("super_speed_activate_stamina", 10.0f))) {
+        return;
+    }
+    chr->skillKiRate |= bit;
+    BtlCharSnd_PlayCommon((void *)chr, 0x14);
+    HudCombo_ShowModeText(chr->player, ui ? 2 : 4, 0);
+}
+
+/* Mod "Ultra Instinct" v56: god forms. Bits 12..14 of skillKiRate: the god form the fighter is in (1 SSG, 2 SSGSS, 3 Rose, 4 Super
+   Saiyan 4 Limit Breaker); bits 16..18: the one its queued transformation brings (btl_act_j.c). BtlChar_OnModelLoaded (btl_char_mgr.c) makes the
+   queued one current when the transformation's model is loaded (an ordinary transformation queues none), and
+   ends both with a new member or a fusion. */
+s32 BtlAct_GodActive(BtlActIChr *chr) {
+    return (chr->skillKiRate >> 12) & 7;
+}
+
+s32 BtlAct_GodPending(BtlActIChr *chr) {
+    return (chr->skillKiRate >> 16) & 7;
+}
+
+void BtlAct_GodSetPending(BtlActIChr *chr, s32 god) {
+    chr->skillKiRate = (chr->skillKiRate & ~0x70000) | (god << 16);
+}
+
+s32 BtlAct_GodTakePending(BtlActIChr *chr) {
+    s32 god = (chr->skillKiRate >> 16) & 7;
+
+    chr->skillKiRate = (chr->skillKiRate & ~0x77000) | (god << 12);
+    if (god) {
+        HudCombo_ShowModeText(chr->player, god == 4 ? 10 : 5 + god, 0);  /* the form's name in the technique banner */
+    }
+    return god;
+}
+
+/* For the technique name banner (hud_c_b.c): the multiplier of the Kaioken whose skill action side `side`'s fighter
+   is in (its own skill 0x18, or L2 + down + circle), else 0. */
+s32 BtlAct_KaiokenBanner(s32 side) {
+    BtlActIChr *chr = (BtlActIChr *)(void *)BtlChar_Get(side);
+    s32 level;
+    s32 top;
+    s32 act;
+
+    if (chr == NULL) {
+        return 0;
+    }
+    act = BtlAct_GetCurrent((void *)chr);
+    if (act < 0xFD || act > 0x102) {
+        return 0;
+    }
+    if (!(chr->skillKiRate & 0x900) && BtlSkill_GetId(chr, BtlAct_GetCurrentClass(chr)) != 0x18) {
+        return 0;
+    }
+    level = BtlAct_KaiokenLevel(chr);
+    top = (s32)Port_ModValue("kaioken_levels", (f32)BTL_KAIOKEN_MAX);
+    if (top > BTL_KAIOKEN_MAX) {
+        top = BTL_KAIOKEN_MAX;
+    }
+    if (((chr->skillKiRate & 0x100) || level == 0) && level < top) {
+        level++;
+    }
+    return (s32)(Port_ModValue(sKaiokenMultKey[level], sKaiokenMult[level]) + 0.5f);
+}
+
+static void BtlSkill_KaiokenActivate(BtlActIChr *chr) {
+    BtlActIGauge *g = BtlMember_GetActiveGauge(chr);
+    s32 level = BtlAct_KaiokenLevel(chr);
+
+    s32 top = (s32)Port_ModValue("kaioken_levels", (f32)BTL_KAIOKEN_MAX);
+
+    if (top > BTL_KAIOKEN_MAX) {
+        top = BTL_KAIOKEN_MAX;
+    }
+    if (level < top) {
+        level++;
+    }
+    BtlMember_Damage(chr, (s32)Port_ModValue(sKaiokenHealthKey[level], (f32)sKaiokenHealth[level]), 0x41B);
+    (void)g;
+    BtlMember_PayStamina(chr, BTL_KAIOKEN_STAMINA);
+    BtlChar_SetHeldFlag(chr, 0x98);
+    BtlChar_SetFlag(chr, 0x99);
+    BtlObj_SetColorMode(BtlChar_GetObj(chr), 2, 1);
+    chr->skillKiRate = (chr->skillKiRate & ~0x1FF) | level;  /* the modes, the marker and the god form stay */
+}
+
+/* For the CPU (btl_act_j.c): the health the next Kaioken level costs; -1 at the top level. */
+s32 BtlAct_KaiokenNextHealth(BtlActIChr *chr) {
+    s32 level = BtlAct_KaiokenLevel(chr);
+    s32 top = (s32)Port_ModValue("kaioken_levels", (f32)BTL_KAIOKEN_MAX);
+
+    if (top > BTL_KAIOKEN_MAX) {
+        top = BTL_KAIOKEN_MAX;
+    }
+    if (level >= top) {
+        return -1;
+    }
+    level++;
+    return (s32)Port_ModValue(sKaiokenHealthKey[level], (f32)sKaiokenHealth[level]);
+}
+#endif
+
 /*
  * Applies the skill of a slot (0 / 1): the special cases by skill id, health and ki changes, the four stat
  * modifiers by the skill's kind, the two timed values, the use counter, and the blast stock cost.
@@ -1783,6 +1984,12 @@ void BtlSkill_Apply(BtlActIChr *chr, s32 slot) {
     valE = BtlSkill_GetValE(chr, slot);
     valF = BtlSkill_GetValF(chr, slot);
     add = (attr >> 8) & 1;
+#ifdef PORT
+    if (id == 0x18 || (chr->skillKiRate & 0x100)) {
+        BtlSkill_KaiokenActivate(chr);
+        return;
+    }
+#endif
 
     switch (id) {
     case 0xC:
@@ -1974,6 +2181,11 @@ s32 BtlAct_SkillBasic(BtlActIChr *chr, s32 phase) {
         }
     }
     if (phase == 1) {
+#ifdef PORT
+        if (chr->skillKiRate & 0x800) {
+            BtlChar_SetFxBit((void *)chr, 7);  /* Mod "Ultra Instinct" v56: Kaioken's aura charges up (btl_char_fx.c) */
+        }
+#endif
         if (!BtlChar_TestFlag(chr, 0xE) && !BtlChar_TestFlag(chr, 0xF)) {
             BtlChar_SetHeldFlag(chr, 0xE);
         }
@@ -2016,6 +2228,9 @@ s32 BtlAct_SkillBasic(BtlActIChr *chr, s32 phase) {
         }
     }
     if (phase == 3) {
+#ifdef PORT
+        chr->skillKiRate &= ~0x800;
+#endif
         switch (BtlSkill_GetId(chr, cls)) {
         case 0x18:
             if (!BtlChar_TestFlag(chr, 0x98)) {
@@ -2162,7 +2377,11 @@ s32 BtlDecide_Main(BtlActIChr *chr, s32 mask) {
     if (!BtlChar_IsFree(chr)) {
         return 0;
     }
+#ifdef PORT
+    if ((mask & 0x10000000) && BtlMember_HasStamina(chr, BTL_ESCAPE_STAMINA)) {
+#else
     if ((mask & 0x10000000) && BtlMember_HasHealth(chr, 5000)) {
+#endif
         BtlColl_AddActionBit(chr, 0x42);
         if (TEST(0x2E)) {
             BtlAct_SetQueue(chr, 0, 0x42);
@@ -2270,7 +2489,11 @@ s32 BtlDecide_Main(BtlActIChr *chr, s32 mask) {
     if ((mask & 0x800000) && BtlAct_CheckSkillInput(chr)) {
         return 1;
     }
+#ifdef PORT
+    if ((mask & 0x80) && !BtlChar_TestFlag(chr, 6)) {  /* Mod "Ultra Instinct" v56: also in Kaioken */
+#else
     if ((mask & 0x80) && !BtlChar_TestFlag(chr, 6) && !BtlChar_TestFlag(chr, 0x98)) {
+#endif
         if (BtlParam_GetUnk0(chr) & 0x80) {
             if (BtlMember_IsKiFull(chr) && BtlMember_HasBlast(chr, 100000) && TEST(0x13)) {
                 BtlAct_SetQueue(chr, 0, 0x37);

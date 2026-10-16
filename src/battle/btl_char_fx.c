@@ -149,6 +149,72 @@ s32 BtlChar_GetHitSoundLine(s32 kind) {
     return -1;
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: Kaioken's burst, the effect Goku (Early)'s own Kaioken shows, for every Kaioken character: shot
+   slot 5 (eft_g.c), from sub-entries 8 (the effect) and 9 (its skill record) of the fighter's effect sub-pack, where
+   build_mod.py puts Goku (Early)'s. Started for a Kaioken from L2 + down + circle in place of the character's own
+   skill effect, and while charging ki in Kaioken. Returns 0 when the fighter's effect file has none. */
+extern s32 *BtlCharApi_GetPlayerObjUnk58(s32 player);
+extern s32 BtlCharApi_IsInSkill(s32 objId);
+
+static s32 BtlFx_KaiokenBurst(s32 player, s32 objId, s32 unkA24) {
+    s32 *base = BtlCharApi_GetPlayerObjUnk58(player);
+    BtlMemberAuraReq req;
+    u8 *rec;
+
+    if (base == NULL || base[0] < 10 || base[10] - base[9] <= 0x40 || base[11] - base[10] < 0x74) {
+        return 0;
+    }
+    rec = (u8 *)base + ((u32)base[10] >> 2 << 2);
+    req.objId = objId;
+    req.kind = 5;
+    req.unk8 = unkA24;
+    req.unkC = *(f32 *)(rec + 0x34);  /* the skill record of slot 1: shotUnk30, shotTime, shotSpeed, shotTurn */
+    req.unk10 = *(f32 *)(rec + 0x1C);
+    req.unk14 = *(f32 *)(rec + 0x24) * 10.0f * (1000.0f / 3600.0f / 30.0f);
+    req.unk18 = *(f32 *)(rec + 0x2C) * 3.14159265f / 180.0f * (1.0f / 30.0f);
+    EftShot_Request(&req);
+    return 1;
+}
+extern s32 BtlAct_ModeOn(void *chr, s32 bit);
+extern s32 BtlAct_GetCurrent(BtlMemberChr *chr);
+
+/* Whether the Kaioken burst of fighter `objId` goes on (eft_k.c): 1 during the Kaioken skill action (its activation:
+   the burst plays its own frame table), 2 while charging ki in Kaioken until the charge ends or reaches its maximum
+   (animation 0x36): the burst stays in its loop. */
+s32 BtlFx_KaiokenBurstHeld(s32 objId) {
+    BtlMemberChr *chr = BtlChar_Get(objId);
+    s32 act;
+
+    if (chr == NULL) {
+        return 0;
+    }
+    act = BtlAct_GetCurrent(chr);
+    if (act >= 0xFD && act <= 0x102) {
+        return 1;
+    }
+    if (act == 0x37 && BtlAnim_GetId(chr) != 0x36 && BtlChar_TestFlag(chr, 0x98)) {
+        return 2;
+    }
+    return 0;
+}
+
+/* A fighter in Kaioken (held flag 0x98) started the effect of a super of kind `kind` (eft_h.c: 0 Blast 1 skill, 1 Blast 2,
+   2 ultimate): its Kaioken burst plays once, its whole sequence. kaioken_burst_on_super: 0 never, 1 Blast 2 and
+   ultimates, 2 also Blast 1 skills. */
+extern f32 Port_ModValue(const char *key, f32 def);
+
+void BtlFx_KaiokenBurstOnSuper(s32 objId, s32 kind) {
+    BtlMemberChr *chr = BtlChar_Get(objId);
+    f32 on = Port_ModValue("kaioken_burst_on_super", 1.0f);
+
+    if (chr == NULL || on <= 0.0f || (kind == 0 && on < 2.0f) || !BtlChar_TestFlag(chr, 0x98)) {
+        return;
+    }
+    BtlFx_KaiokenBurst(chr->objId, chr->objId, BtlChar_GetObj(chr)->unkA24);
+}
+#endif
+
 /* Spawns the effect requested by fx bits 0x3C..0x40 (the highest set bit picks the kind 0..4). */
 void BtlChar_SpawnFxBits3C(BtlMemberChr *chr) {
     BtlMemberAuraReq req;
@@ -169,6 +235,12 @@ void BtlChar_SpawnFxBits3C(BtlMemberChr *chr) {
     if (BtlChar_TestFxBit(chr, 0x40)) {
         kind = 4;
     }
+#ifdef PORT
+    if (kind == 1 && BtlAct_ModeOn((void *)chr, 0x800) &&  /* a Kaioken from L2 + down + circle */
+        BtlFx_KaiokenBurst(chr->objId, chr->objId, BtlChar_GetObj(chr)->unkA24)) {
+        kind = -1;
+    }
+#endif
     if (kind >= 0) {
         s32 unkA24;
 
@@ -253,6 +325,34 @@ void BtlChar_SpawnFxBits0(BtlMemberChr *chr) {
         EftTransform_End();
     }
 }
+
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: a hash of the frame counter and `salt` for the random look of an Ultra Instinct hit (no state of
+   its own, so replays and online play agree). */
+#define BTL_ABILITY_ULTRA_INSTINCT 0x7E
+#define BTL_ABILITY_SUPER_SPEED 0x7D
+static u32 BtlFx_UltraInstinctRand(s32 salt) {
+    u32 r = (u32)BtlChar_FrameMod(0x40000000) * 2654435761u + (u32)salt * 0x9E3779B9u;
+
+    r ^= r >> 15;
+    r *= 0x2C1B3C6Du;
+    r ^= r >> 12;
+    return r;
+}
+
+/* The hit sparks the game itself uses for ordinary hits (BtlChar_SpawnHitFx): small and cheap. The others (the big
+   flashes and the blast explosions) fill the screen and slow the game down. */
+static const s32 sUltraInstinctSparks[8] = { 0, 1, 2, 3, 7, 8, 0xC, 0xD };
+extern s32 BtlAct_GetCurrent(BtlMemberChr *chr);
+
+/* The strikes that get the random sparks: rush chain, smashes and vanish attacks (0x44..0x5D) and the attack table
+   (0x70..0xAD) without the volley 0x95. Not the triangle finishers of square N times + (up / down +) triangle
+   (0x5E..0x66), ki blasts or techniques: those keep their own look. */
+static s32 BtlFx_IsSparkStrike(s32 a) {
+    return ((a >= 0x44 && a <= 0x5D) || (a >= 0x70 && a <= 0xAD)) && a != 0x95;
+}
+void BtlFx_UltraInstinctBurst(Vec4 *pos, Vec4 *dir, s32 objId);
+#endif
 
 /* Spawns the hit effect and plays the hit sound requested by fx bits 0x1B..0x27. */
 void BtlChar_SpawnHitFx(BtlMemberChr *chr) {
@@ -383,6 +483,16 @@ void BtlChar_SpawnHitFx(BtlMemberChr *chr) {
             req.kind = 5;
         }
     }
+#ifdef PORT
+    if (req.kind >= 0 && BtlChar_TestFxBit(chr, 0x1B) && BtlFx_IsSparkStrike(BtlAct_GetCurrent(chr)) &&
+        (BtlMember_HasAbility(chr, BTL_ABILITY_ULTRA_INSTINCT) || BtlMember_HasAbility(chr, BTL_ABILITY_SUPER_SPEED))) {
+        Vec4 target;
+
+        req.kind = sUltraInstinctSparks[BtlFx_UltraInstinctRand(chr->objId) % 8];
+        BtlOpp_GetTargetPos(chr, &target);
+        BtlFx_UltraInstinctBurst(&target, NULL, chr->objId);
+    }
+#endif
     if (req.kind >= 0) {
         f32 yaw = BtlUtil_WrapAngle(pose->yaw + BtlAtk_GetLaunchAngleA(chr));
         f32 pitch = BtlAtk_GetLaunchAngleB(chr);
@@ -659,6 +769,29 @@ s32 BtlFx_UpdateAura(FxChr *chr) {
 void BtlFx_UpdateChargeFx(FxChr *chr) {
     s32 arg[4];
 
+#ifdef PORT
+    if (BtlChar_TestFlag((void *)chr, 0x98)) {  /* Mod "Ultra Instinct" v56 */
+        if (EftCharge_IsActive(chr->objId)) {
+            EftCharge_Stop(chr->objId);
+        }
+        if (BtlChar_TestFxBit(chr, 7) && !BtlCharApi_IsInSkill(chr->objId) &&  /* the activation has its own */
+            BtlChar_IsFxBitNew(chr, 7)) {  /* one per charge, held at its peak (eft_k.c) */
+            BtlFx_KaiokenBurst(chr->player, chr->objId, *(s32 *)((u8 *)BtlChar_GetObj(chr) + 0xA24));
+        }
+        return;
+    }
+#endif
+#ifdef PORT
+    {
+        extern s32 BtlAct_GodActive(void *chr);
+        extern void BtlGod_RecolorCharge(s32 side, s32 *pack);
+        extern s32 *BtlScene_GetCharPackEntry(s32 side, s32 idx);
+
+        if (BtlAct_GodActive((void *)chr) && BtlChar_TestFxBit(chr, 7) && BtlChar_IsFxBitNew(chr, 7)) {
+            BtlGod_RecolorCharge(chr->player, BtlScene_GetCharPackEntry(chr->player, 2));  /* Mod "Ultra Instinct" v56 */
+        }
+    }
+#endif
     if (BtlChar_TestFxBit(chr, 7)) {
         if (!EftCharge_IsActive(chr->objId)) {
             arg[0] = chr->objId;
@@ -672,10 +805,38 @@ void BtlFx_UpdateChargeFx(FxChr *chr) {
     }
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: whether the fighter's god form keeps the power-up glow on (Port_ModGodGlow). */
+static s32 BtlFx_GodGlow(FxChr *chr) {
+    extern s32 BtlAct_GodActive(void *chr);
+    extern s32 Port_ModGodGlow(s32 form);
+
+    return Port_ModGodGlow(BtlAct_GodActive((void *)chr));
+}
+
+/* Each frame: the glow of a god form on while it lasts (it fades with the form, unless max power has its own). */
+static void BtlFx_UpdateGodGlow(FxChr *chr) {
+    extern s32 EftGlow_IsActive(s32 objId);
+    static s32 sOn[8];
+    s32 want = BtlFx_GodGlow(chr);
+    s32 me = chr->player & 7;
+
+    if (want && !EftGlow_IsActive(chr->player)) {
+        EftGlow_Request(chr->player, 0);
+    } else if (!want && sOn[me] && !BtlChar_TestFxBit(chr, 4)) {
+        EftGlow_Request(chr->player, 1);
+    }
+    sOn[me] = want;
+}
+#endif
+
 /* Requests 4 and 5: the powered-up look (object mask bit 6) and its aura variant. Not void in the original (no tail call). */
 s32 BtlFx_UpdatePowerUpLook(FxChr *chr) {
     FxObj *obj = BtlChar_GetObj(chr);
 
+#ifdef PORT
+    BtlFx_UpdateGodGlow(chr);
+#endif
     if (!(BtlParam_GetFlags(chr) & 0x10) || BtlMember_HasAnyListedAbility(chr)) {
         if (BtlChar_TestFxBit(chr, 5)) {
             EftGlow_Request(chr->player, 2);
@@ -688,7 +849,13 @@ s32 BtlFx_UpdatePowerUpLook(FxChr *chr) {
                 BtlObj_SetColorMode(obj, 6, 1);
             }
             if (BtlChar_IsFxBitEnded(chr, 4)) {
+#ifdef PORT
+                if (!BtlFx_GodGlow(chr)) {  /* a god form's glow stays */
+                    EftGlow_Request(chr->player, 1);
+                }
+#else
                 EftGlow_Request(chr->player, 1);
+#endif
                 EftAura_Command(chr->player, 5);
                 BtlObj_SetColorMode(obj, 6, 0);
             }
@@ -870,6 +1037,30 @@ extern void EftGndDust_SpawnImpact(s32 objId, Vec4 *pos, f32 scale);
 extern void EftCharaFx_Start(FxArg2 *arg);
 extern void EftCharaFx_Stop(s32 objId);
 extern void EftImpact_SpawnHitScaled(FxPosArg *arg, f32 size);
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: one extra impact at `pos`: one of the small hit sparks (sUltraInstinctSparks), picked at random, at
+   the fighter's own size (EftImpact_SpawnHit, as the game's hits). */
+void BtlFx_UltraInstinctBurst(Vec4 *pos, Vec4 *dir, s32 objId) {
+    FxPosArg arg;
+    u32 r = BtlFx_UltraInstinctRand(objId + 0x55);
+
+    arg.pos = *pos;
+    arg.pos.w = 1.0f;
+    if (dir != NULL) {
+        arg.pos2 = *dir;
+    } else {
+        arg.pos2.x = 0.0f;
+        arg.pos2.y = 0.0f;
+        arg.pos2.z = 1.0f;
+        arg.pos2.w = 0.0f;
+    }
+    arg.kind = sUltraInstinctSparks[(r >> 8) % 8];
+    arg.objId = objId;
+    arg.unk28 = 0;
+    arg.unk2C = 0;
+    EftImpact_SpawnHit(&arg);
+}
+#endif
 extern void Vec4_Lerp(Vec4 *out, Vec4 *a, Vec4 *b, f32 t);
 extern s32 BtlOpp_GetObjId(FxChr *chr);
 extern s32 BtlCharApi_IsModelNew(s32 objId);

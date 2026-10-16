@@ -650,6 +650,20 @@ void EftShotTechMgr_Reset(EftKTask *task) {
 
 /* ---- technique events ---- */
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: the events of Kaioken's burst (shot slot 5), apart from the fighter's techniques, so the burst can
+   play along with a super; gEftBurstCtx: the fighter whose burst item is being updated (eft_j.c), -1 none. */
+static EftTechEvtEntry sEftBurstEvt[8];
+s32 gEftBurstCtx = -1;
+
+static EftTechEvtEntry *EftTechEvt_EntryOf(EftKSrc *src) {
+    if (src->slot == 5) {
+        return &sEftBurstEvt[src->objId & 7];
+    }
+    return &gEftTechEvt->entries[src->objId];
+}
+#endif
+
 /* Event bits of a fighter this frame (0 when the layer does not exist). */
 s32 EftTechEvt_GetEvents(s32 objId) {
     EftTechEvt *evt = gEftTechEvt;
@@ -658,10 +672,18 @@ s32 EftTechEvt_GetEvents(s32 objId) {
     if (evt == NULL) {
         return 0;
     }
+#ifdef PORT
+    if (gEftBurstCtx == objId) {
+        return sEftBurstEvt[objId & 7].events;  /* Mod "Ultra Instinct" v56 */
+    }
+#endif
     e = &evt->entries[objId];
     return e->events;
 }
 
+#ifdef PORT
+extern s32 BtlFx_KaiokenBurstHeld(s32 objId);  /* Mod "Ultra Instinct" v56 (btl_char_fx.c) */
+#endif
 /* Starts the timeline of a technique: one task that turns the fighter's animation into event bits. */
 void *EftTechEvt_Start(EftKSrc *src, s32 flagTime, s32 endTime) {
     EftTechEvtArg arg;
@@ -715,7 +737,12 @@ void EftTechEvt_Init(EftKTask *task) {
     size = gEftTechEvt->count * sizeof(EftTechEvtEntry);
     gEftTechEvt->entries = BtlPool_Alloc(BtlPool_GetCurrent(), size);
     memset(gEftTechEvt->entries, 0, size);
+#ifdef PORT
+    /* Mod "Ultra Instinct" v56: room for a Kaioken burst next to each fighter's technique */
+    gEftTechEvt->list = BtlTask_CreateChildList(task, gEftTechEvt->count * 2, sizeof(EftTechEvtTask));
+#else
     gEftTechEvt->list = BtlTask_CreateChildList(task, gEftTechEvt->count, sizeof(EftTechEvtTask));
+#endif
 }
 
 /* Layer term. */
@@ -733,6 +760,11 @@ void EftTechEvt_Update(void) {
         EftTechEvtEntry *e = &gEftTechEvt->entries[i];
         e->events = 0;
     }
+#ifdef PORT
+    for (i = 0; i < 8; i++) {
+        sEftBurstEvt[i].events = 0;
+    }
+#endif
 }
 
 /* Timeline init: keeps the argument; a kind-0 definition with any frame number uses the frame table. */
@@ -753,7 +785,11 @@ void EftTechEvtTask_Init(EftKTask *task, EftTechEvtArg *arg) {
             }
         }
     }
+#ifdef PORT
+    e = EftTechEvt_EntryOf(src);
+#else
     e = &gEftTechEvt->entries[src->objId];
+#endif
     e->requests = 0;
 }
 
@@ -788,7 +824,11 @@ void EftTechEvtTask_Reset(EftKTask *task) {
 void EftTechEvtTask_Draw(EftKTask *task) {
     EftTechEvtTask *w = task->work;
     EftKSrc *src = w->arg.src;
+#ifdef PORT
+    EftTechEvtEntry *e = EftTechEvt_EntryOf(src);
+#else
     EftTechEvtEntry *e = &gEftTechEvt->entries[src->objId];
+#endif
 
     if (w->flags & 0x10) {
         return;
@@ -830,9 +870,22 @@ void EftTechEvtTask_Draw(EftKTask *task) {
 void EftTechEvtTask_UpdateNormal(EftKTask *task) {
     EftTechEvtTask *w = task->work;
     EftKSrc *src = w->arg.src;
+#ifdef PORT
+    EftTechEvtEntry *e = EftTechEvt_EntryOf(src);
+#else
     EftTechEvtEntry *e = &gEftTechEvt->entries[src->objId];
+#endif
     u64 ev = EftTechEvtTask_CollectEvents(w);
 
+#ifdef PORT
+    if (src->slot == 5 && BtlFx_KaiokenBurstHeld(src->objId) == 2) {
+        /* Mod "Ultra Instinct" v56: Kaioken's burst while charging: held in its loop, at the frame before FIRE (FIRE stops the looping emitters); once the charge ends its table goes on: FIRE, the fade, END */
+        ev &= ~(u64)0xC00;
+        if (src->def->frames[1] > 1 && w->frame + 1 >= src->def->frames[1]) {
+            w->frame = src->def->frames[1] - 2;
+        }
+    }
+#endif
     w->frame++;
     if (ev & 0x200) {
         e->events |= EFT_TECH_EVT_START;
@@ -851,6 +904,16 @@ void EftTechEvtTask_UpdateNormal(EftKTask *task) {
         BtlTask_SetDead(task);
         return;
     }
+#ifdef PORT
+    if (src->slot == 5) {  /* Mod "Ultra Instinct" v56: Kaioken's burst runs its own frame table (FIRE stops its loop, END ends it), not the fighter's skill */
+        w->flags &= ~2;  /* no "ready to fire" (held flag 0xA7) for the fighter */
+        if (src->def->frames[2] < 0 && !BtlFx_KaiokenBurstHeld(src->objId)) {
+            e->events |= EFT_TECH_EVT_END;  /* a table without END: it ends with the charge */
+            BtlTask_SetDead(task);
+            return;
+        }
+    } else
+#endif
     if (src->def->kind == 0) {
         if (EftTechEvt_IsInterrupted(src->objId)) {
             e->events |= EFT_TECH_EVT_ABORT;

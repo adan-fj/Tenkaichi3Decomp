@@ -535,6 +535,17 @@ void EftAura_SetType(EftAuraWork *aura, s32 objId, s32 type, s32 paramFlags) {
     }
     multi = aura->flags & 0x80;
     EftAura_LoadColors(aura, alt, multi);
+#ifdef PORT
+    {
+        extern s32 BtlCharApi_GodForm(s32 objId);
+        extern void Port_ModGodTint(f32 *vec, s32 count, s32 form);
+        s32 god = BtlCharApi_GodForm(objId);  /* Mod "Ultra Instinct" v56 */
+
+        if (god) {
+            Port_ModGodTint(&aura->colorStart.x, 14, god);  /* colorStart .. sparkColorAlt[3] */
+        }
+    }
+#endif
 }
 
 /* Reads the fighter's aura type and height: called at creation and again every frame. */

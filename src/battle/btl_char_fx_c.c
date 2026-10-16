@@ -446,6 +446,32 @@ void BtlFx_UpdateObjEvents(FxChr *chr) {
 void BtlFx_UpdateAll(FxChr *chr) {
     FxObj *obj = BtlChar_GetObj(chr);
 
+#ifdef PORT
+    {
+        extern f32 Port_ModValue(const char *key, f32 def);
+        extern void Port_ModDebugFx(s32 player, s32 action, s32 anim, u32 lo, u32 hi, u32 objFlags, s32 aura);
+        extern s32 BtlCharApi_GetAuraType(s32 objId);
+
+        if (Port_ModValue("debug_kaioken_fx", 0.0f) != 0.0f &&  /* Mod "Ultra Instinct" v56 */
+            (BtlChar_TestFlag(chr, 0x98) ||
+             (BtlCharApi_IsInSkill(chr->objId) && BtlSkill_GetId(chr, BtlAct_GetCurrentClass(chr)) == 0x18))) {
+            u32 lo = 0;
+            u32 hi = 0;
+            s32 n;
+
+            for (n = 0; n < 32; n++) {
+                if (BtlChar_TestFxBit(chr, n)) {
+                    lo |= 1u << n;
+                }
+                if (BtlChar_TestFxBit(chr, n + 32)) {
+                    hi |= 1u << n;
+                }
+            }
+            Port_ModDebugFx(chr->player, BtlAct_GetCurrent(chr), BtlAnim_GetId(chr), lo, hi, obj->flags,
+                            BtlCharApi_GetAuraType(chr->objId));
+        }
+    }
+#endif
     BtlFx_UpdateAura(chr);
     BtlFx_UpdateChargeFx(chr);
     BtlChar_SpawnFxBits3C(chr);

@@ -339,6 +339,16 @@ void EftShot_Start(EftHStartArg *arg) {
     EftShot_SetCurSlot(arg->chr, arg->slot);
     EftTechEvt_Start(s, EftShot_GetLeadTime(s), s->param->life);
     BtlTaskList_AddTail(group->children, cls, s);
+#ifdef PORT
+    if (arg->slot >= 0 && arg->slot < 5) {
+        extern void BtlFx_KaiokenBurstOnSuper(s32 objId, s32 kind);  /* Mod "Ultra Instinct" v56: Kaioken's burst with a super */
+        extern s32 EftShot_GetCurSlot(s32 chr);
+        s32 cur = EftShot_GetCurSlot(arg->chr);
+
+        BtlFx_KaiokenBurstOnSuper(arg->chr, s->param->kind);
+        EftShot_SetCurSlot(arg->chr, cur);
+    }
+#endif
 }
 
 /* Kills the character task of the layer, after resetting the scene tasks that belong to the character. */
@@ -398,6 +408,57 @@ f32 EftShot_GetLeadTime(EftHSlot *slot) {
         }
     return t;
 }
+
+#ifdef PORT
+/* Mod "Ultra Instinct" v56: the parameter block of shot slot 5, Kaioken's burst: EftShot_BuildParam's skill branch for slot 1 of
+   the skill record `d`, Goku (Early)'s, which build_mod.py puts next to the effect (eft_g.c). */
+void EftShot_KaiokenParam(EftShotParam *p, EftSkillSrc *d) {
+    s32 n = 1;
+    s32 i;
+
+    memset(p, 0, sizeof(EftShotParam));
+    p->id = d->id[n];
+    p->unk2 = d->unk14[n];
+    p->kind = 0;
+    p->unk5 = d->unk62[n];
+    p->unk6 = d->unk38[n];
+    p->unk7 = 0;
+    p->unk8 = d->unk3E[n];
+    p->shots = d->unk3A[n];
+    p->unkA = d->unk40[n];
+    p->unkB = d->unk42[n];
+    p->unkC = 0;
+    p->type = d->type[n];
+    for (i = 0; i < 6; i++) {
+        p->unkE[i] = d->unk48[i][n];
+        p->unk16[i] = (s8)d->unk54[i][n];
+    }
+    p->unk22 = 0;
+    p->unk24 = 0;
+    p->life = d->time[n] * 30.0f;
+    p->unk2C = 0.0f;
+    p->unk30 = d->unk30[n];
+    p->unk34 = d->unk20[n];
+    p->unk38 = d->unk28[n];
+    p->flags = d->flags[n];
+    p->unk40 = (s8)d->unk46[n];
+    p->unk42 = (s8)d->unk44[n];
+    p->volley = (s8)d->unk3C[n];
+    p->unk4C = 0.0f;
+    p->unk48 = (s8)d->unk6E[n];
+    p->unk4A = (s8)d->unk70[n];
+    p->unk50 = 1.0f;
+    p->unk14 = -1;
+    p->unk54 = 1.0f;
+    for (i = 0; i < 8; i++) {
+        p->unk58[i] = -1;
+        p->unk60[i] = 0.0f;
+    }
+    p->unk84 = 0.1f;
+    p->unk88 = 1.0f;
+    p->unk80 = 0;
+}
+#endif
 
 /* The effect pack of a technique slot, from the fighter object. */
 s32 EftShot_GetCharPack(s32 chr, s32 slot) {

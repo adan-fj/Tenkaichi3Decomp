@@ -492,6 +492,15 @@ s32 BtlCharApi_CanTransform(s32 objId) {
     BtlCapiBChr *chr = BtlChar_FindByObjId(objId);
     s32 slot;
 
+#ifdef PORT
+    {
+        extern f32 Port_ModValue(const char *key, f32 def);
+
+        if (Port_ModValue("cpu_skills", 1.0f) != 0.0f) {
+            return 0;  /* Mod "Ultra Instinct" v56: the CPU's forms are BtlAct_CpuThink's (btl_act_j.c) */
+        }
+    }
+#endif
     if (chr != NULL) {
         slot = BtlParam_GetUnkAC(chr);
         if (slot < 0) {
