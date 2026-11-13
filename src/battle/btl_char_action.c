@@ -151,6 +151,18 @@ extern BtlActHandler gBtlActHandlers[BTLACT_COUNT];
 
 /* Requests the action to switch to at the next dispatch (-1 is ignored). */
 void BtlAct_Request(BtlActChr *chr, s32 id) {
+#ifdef PORT
+    {
+        extern f32 Port_ModValue(const char *key, f32 def);
+        extern s32 BtlInput_IsHeld(BtlActChr *chr, u32 mask);
+
+        /* Mod "Ultra Instinct" v83: the dash with no direction or forward homes on the opponent; left, right or back
+           is the dash in that direction, as always */
+        if (id == 0x1A && !BtlInput_IsHeld(chr, 0xE0) && Port_ModValue("dash_always_homing", 1.0f) != 0.0f) {
+            id = 0x19;
+        }
+    }
+#endif
     if (id != -1) {
         chr->act.request = id;
     }
@@ -487,6 +499,11 @@ s32 BtlAct_IsAttackId(s32 id) {
     return (u32)(id - 0x70) < 0x3E;
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v83: every character may use every attack of the table whose motion it has, whatever its skill bits. */
+extern s32 BtlObjAnim_HasMotion(void *obj, s32 anim);
+#endif
+
 /* Whether the skill bit an attack record needs is set in the object's skill masks (no bit needed = yes). */
 static inline BtlActAttackRec *BtlAct_GetAttackRec(s32 attack) {
     return &gBtlChars->attackTbl[attack];
@@ -504,6 +521,11 @@ s32 BtlAct_TestAttackSkill(BtlActChr *chr, s32 attack) {
     s32 bit = BtlAct_GetAttackRec(attack)->needSkill;
 
     if (bit >= 0) {
+#ifdef PORT
+        if (BtlObjAnim_HasMotion(BtlChar_GetObj(chr), BtlAct_GetAttackRec(attack)->motion)) {
+            return 1;
+        }
+#endif
         if ((u32)bit >= 0x20) {
             if (BtlAct_TestSkillHi(chr, bit - 0x20)) {
                 return 1;
@@ -515,6 +537,24 @@ s32 BtlAct_TestAttackSkill(BtlActChr *chr, s32 attack) {
     }
     return 1;
 }
+
+#ifdef PORT
+/* Mod "Ultra Instinct" v83: in Ultra Instinct (mode 0x200) and Super Speed (0x400) the square rush is endless: no finishing
+   5th / 10th hit, the rush hits go round for as long as square is pressed, on the ground and in the air
+   (btl_act_a.c). ultra_instinct_endless_chains / super_speed_endless_chains. */
+extern s32 BtlAct_ModeOn(BtlActChr *chr, s32 bit);
+extern f32 Port_ModValue(const char *key, f32 def);
+
+s32 BtlAct_EndlessChain(BtlActChr *chr) {
+    if (BtlAct_ModeOn(chr, 0x200) && Port_ModValue("ultra_instinct_endless_chains", 1.0f) != 0.0f) {
+        return 1;
+    }
+    if (BtlAct_ModeOn(chr, 0x400) && Port_ModValue("super_speed_endless_chains", 1.0f) != 0.0f) {
+        return 1;
+    }
+    return 0;
+}
+#endif
 
 /* Builds the pending attack parameters from the attack table record of an attack action (0x70..0xAD). */
 void BtlAct_PrepareAttack(BtlActChr *chr, s32 id) {
@@ -655,11 +695,17 @@ void BtlAct_CountAndMarkOpponent(BtlActChr *chr) {
 void BtlAct_EndFlag98(BtlActChr *chr) {
     void *obj;
 
+#ifdef PORT
+    chr->unkE10 &= ~0xF00;  /* Mod "Ultra Instinct" v83: Ultra Instinct and Super Speed end too */
+#endif
     if (BtlChar_TestFlag(chr, 0x98)) {
         obj = BtlChar_GetObj(chr);
         BtlChar_ClearFlag(chr, 0x98);
         BtlObj_SetColorMode(obj, 2, 0);
         BtlStat_EndKind4(chr);
+#ifdef PORT
+        chr->unkE10 &= 0x77000;  /* the Kaioken level; the god bits stay */
+#endif
     }
 }
 
@@ -687,6 +733,332 @@ extern f32 BtlAct_GetHeight_(BtlActChr *chr) __asm__("BtlAct_GetHeight");
 /* BtlAct_Action04 ends on a tail call to BtlChar_SetFlag, which an int function only gets from `return f();`. */
 extern s32 BtlChar_SetFlagRet(BtlActChr *chr, s32 bit) __asm__("BtlChar_SetFlag");
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v83: what a member with ability 0x7E (the Ultra Instinct capsule) does differently here: its dodges are
+   plain steps (0x1C / 0x1D / 0x1B) instead of vanishing steps, the first 6 frames of a dodge are invulnerable,
+   and any attack input ends a dodge at once. An attacker whose opponent is dodging that way is kept in front of it
+   (BtlAct_UpdateTimers). The speed of its attacks is in btl_char_status_anim.c. */
+#ifndef BTL_ABILITY_ULTRA_INSTINCT
+#define BTL_ABILITY_ULTRA_INSTINCT 0x7E
+#define BTL_ULTRA_INSTINCT_STAMINA BtlMember_UltraInstinctStamina(chr, 0)
+extern f32 Port_ModValue(const char *key, f32 def);
+extern s32 BtlMember_UltraInstinctStamina(void *chr, s32 activate);
+#endif
+#define BTL_ULTRA_INSTINCT_INVULNERABLE ((s32)Port_ModValue("ultra_instinct_invulnerable_frames", 6.0f))
+extern s32 BtlDecide_Attack(BtlActChr *chr, s32 mask);
+extern s32 BtlInput_TestAction(BtlActChr *chr, s32 id, s32 want);
+extern f32 BtlMember_PowerLevel(BtlActChr *chr);
+extern void Port_PowerReport(s32 side, f32 pl);
+extern s32 BtlOpp_HasAbility(BtlActChr *chr, s32 n);
+extern s32 BtlOpp_GetSeenAction(BtlActChr *chr);
+extern void BtlMove_WarpInFrontOfOpponent(BtlActChr *chr, f32 gap);
+
+static void BtlAct_UltraInstinctInvulnerable(BtlActChr *chr) {
+    BtlChar_SetFlag(chr, 0x42);
+    BtlChar_SetFlag(chr, 0x43);
+    BtlChar_SetFlag(chr, 0x44);
+    BtlChar_SetFlag(chr, 0x45);
+    BtlChar_SetFlag(chr, 0x46);
+}
+
+/* L2 + X (input conditions 0x15 / 0x14) starts the dash (0x1A, or the homing dash 0x19 with lock-on) out of
+   anything but a ki blast, a beam or a hit reaction: neutral, movement, melee (0xB..0xAD without the volley
+   0x95), Blast 1 skills (0xFD..0x104) and rushing techniques (0x11B..0x129). Every character. */
+static void BtlAct_DashCancel(BtlActChr *chr) {
+    s32 cur = chr->act.current;
+
+    if (chr->act.request != -1 || !BtlChar_IsFree(chr) || !BtlMember_HasKi(chr, 1000)) {
+        return;
+    }
+    if (!((cur >= 0xB && cur <= 0xAD && cur != 0x95 && cur != 0x19 && cur != 0x1A) ||
+          (cur >= 0xFD && cur <= 0x104) || (cur >= 0x11B && cur <= 0x129))) {
+        return;
+    }
+    if (BtlInput_TestAction(chr, 0x15, 1)) {
+        BtlAct_Request(chr, 0x1A);
+    } else if (BtlChar_TestFlag(chr, 5) && BtlInput_TestAction(chr, 0x14, 1)) {
+        BtlAct_Request(chr, 0x19);
+    }
+}
+
+/* A busy Ultra Instinct fighter (charging a technique, in a strike or a ki blast) dodges without leaving what it
+   is doing: it slides aside, across the line from the attacker, ultra_instinct_busy_dodge_distance in
+   ultra_instinct_busy_dodge_frames frames, and nothing lands meanwhile. Called by the dodge code (btl_char_hit.c,
+   btl_char_coll_b.c); one slide at a time. */
+extern s32 BtlMember_SlideActive(BtlActChr *chr);
+extern void BtlMember_SlideSet(BtlActChr *chr, f32 dx, f32 dz, s32 frames);
+extern s32 BtlMember_SlideTake(BtlActChr *chr, f32 *dx, f32 *dz);
+
+void BtlAct_UltraInstinctSlide(BtlActChr *def, BtlActChr *atk) {
+    f32 dist = Port_ModValue("ultra_instinct_busy_dodge_distance", 45.0f);
+    s32 frames = (s32)Port_ModValue("ultra_instinct_busy_dodge_frames", 5.0f);
+    f32 ax = 0.0f;
+    f32 az = 1.0f;
+    f32 len;
+    f32 side;
+
+    if (BtlMember_SlideActive(def) || frames < 1) {
+        return;
+    }
+    if (atk != NULL) {
+        ax = BtlChar_GetPos(def)->pos.x - BtlChar_GetPos(atk)->pos.x;
+        az = BtlChar_GetPos(def)->pos.z - BtlChar_GetPos(atk)->pos.z;
+    }
+    len = sqrtf(ax * ax + az * az);
+    if (len < 0.01f) {
+        ax = 0.0f;
+        az = 1.0f;
+        len = 1.0f;
+    }
+    side = BtlChar_FrameMod(2) ? 1.0f : -1.0f;  /* left or right of the line */
+    BtlMember_SlideSet(def, -az / len * side * dist / frames, ax / len * side * dist / frames, frames);
+    BtlAct_UltraInstinctInvulnerable(def);
+}
+
+/* Turns the fighter (heading and model) straight at its opponent (ultra_instinct_face_opponent), and the opponent at
+   it (ultra_instinct_face_each_other: the two stay locked on to each other, as in the anime), unless the opponent is
+   in a technique (a beam keeps its aim). */
+void BtlAct_UltraInstinctFace(BtlActChr *chr) {
+    extern s32 BtlCharApi_IsInTechnique(s32 objId);
+    BtlActChr *opp = BtlChar_Get(*(s32 *)chr ^ 1);  /* +0: the side */
+    BtlActPose *pose = BtlChar_GetPos(chr);
+    BtlActPose *other;
+    f32 yaw;
+
+    if (opp == NULL || Port_ModValue("ultra_instinct_face_opponent", 1.0f) == 0.0f) {
+        return;
+    }
+    other = BtlChar_GetPos(opp);
+    yaw = atan2f(other->pos.x - pose->pos.x, other->pos.z - pose->pos.z);
+    pose->facing = yaw;
+    pose->rot.y = yaw;
+    if (Port_ModValue("ultra_instinct_face_each_other", 1.0f) != 0.0f && !BtlCharApi_IsInTechnique(opp->objId)) {
+        yaw = atan2f(pose->pos.x - other->pos.x, pose->pos.z - other->pos.z);
+        other->facing = yaw;
+        other->rot.y = yaw;
+    }
+}
+
+/* Mod "Ultra Instinct" v83: a dash strike (btl_act_d.c) keeps the homing dash going while the finisher winds up and charges: every
+   frame the fighter moves at dash_strike_chase_speed (km/h) toward the opponent, up to dash_strike_chase_stop
+   from it, facing it, through the strike too. It ends when the fighter leaves the finisher. */
+s32 gBtlDashStrikeChase[2];
+
+/* The speed (km/h) a chasing dash strike advances at this frame (btl_act_a.c), -1 for the dash's own speed, 0 when it
+   does not: not chasing, or close to the opponent. */
+f32 BtlAct_DashStrikeChaseSpeed(BtlActChr *chr) {
+    BtlActChr *opp;
+    Vec4 d;
+    f32 speed;
+
+    if (!gBtlDashStrikeChase[*(s32 *)chr & 1]) {
+        return 0.0f;
+    }
+    opp = BtlChar_Get((*(s32 *)chr & 1) ^ 1);
+    if (opp == NULL) {
+        return 0.0f;
+    }
+    d.x = BtlChar_GetPos(opp)->pos.x - BtlChar_GetPos(chr)->pos.x;
+    d.y = BtlChar_GetPos(opp)->pos.y - BtlChar_GetPos(chr)->pos.y;
+    d.z = BtlChar_GetPos(opp)->pos.z - BtlChar_GetPos(chr)->pos.z;
+    d.w = 0.0f;
+    (void)d;  /* the stop: BtlAct_DashStrikeAim */
+    speed = Port_ModValue("dash_strike_chase_speed", 0.0f);
+    return speed > 0.0f ? speed : -1.0f;  /* 0 in mod_values: the dash's own speed (-1) */
+}
+
+/* A chasing dash strike's heading straight at the opponent (yaw, pitch: negative up) and the distance it has left
+   to dash_strike_chase_stop from it (0 there); -1 when it is not chasing (btl_act_a.c). */
+f32 BtlAct_DashStrikeAim(BtlActChr *chr, f32 *yaw, f32 *pitch) {
+    BtlActChr *opp;
+    Vec4 d;
+    f32 flat;
+    f32 left;
+
+    if (!gBtlDashStrikeChase[*(s32 *)chr & 1]) {
+        return -1.0f;
+    }
+    opp = BtlChar_Get((*(s32 *)chr & 1) ^ 1);
+    if (opp == NULL) {
+        return -1.0f;
+    }
+    d.x = BtlChar_GetPos(opp)->pos.x - BtlChar_GetPos(chr)->pos.x;
+    d.y = BtlChar_GetPos(opp)->pos.y - BtlChar_GetPos(chr)->pos.y;
+    d.z = BtlChar_GetPos(opp)->pos.z - BtlChar_GetPos(chr)->pos.z;
+    d.w = 0.0f;
+    flat = sqrtf(d.x * d.x + d.z * d.z);
+    *yaw = atan2f(d.x, d.z);
+    *pitch = atan2f(-d.y, flat);
+    left = Vec3_Length(&d) - Port_ModValue("dash_strike_chase_stop", 12.0f);
+    return left > 0.0f ? left : 0.0f;
+}
+
+static void BtlAct_DashStrikeChase(BtlActChr *chr) {
+    s32 side = *(s32 *)chr & 1;
+    s32 act = BtlAct_GetCurrent(chr);
+    BtlActChr *opp;
+    BtlActPose *pose;
+    Vec4 d;
+    f32 len;
+    f32 step;
+    f32 stop;
+
+    if (!gBtlDashStrikeChase[side]) {
+        return;
+    }
+    if (act < 0x5E || act > 0x66 || act == 0x63) {
+        /* not (yet) in the finisher: a few frames of grace for the hand-over from the dash, then it ends */
+        if (gBtlDashStrikeChase[side] > 0 && --gBtlDashStrikeChase[side] < 0) {
+            gBtlDashStrikeChase[side] = 0;
+        }
+        return;
+    }
+    gBtlDashStrikeChase[side] = 4;  /* in the finisher: kept on (flag 0x5B is no sign of a hit: animations raise it) */
+    switch (BtlAnim_GetId(chr)) {  /* the strike motions of the finishers (BtlAct_RushFinishHandler) */
+    case 0x43:
+    case 0x46:
+    case 0x49:
+    case 0x58:
+    case 0x5B:
+    case 0x92:
+    case 0x19B:
+    case 0x19C:
+        gBtlDashStrikeChase[side] = 0;
+        return;
+    }
+    opp = BtlChar_Get(side ^ 1);
+    if (opp == NULL) {
+        return;
+    }
+    pose = BtlChar_GetPos(chr);
+    d.x = BtlChar_GetPos(opp)->pos.x - pose->pos.x;
+    d.y = BtlChar_GetPos(opp)->pos.y - pose->pos.y;
+    d.z = BtlChar_GetPos(opp)->pos.z - pose->pos.z;
+    d.w = 0.0f;
+    (void)len;
+    (void)step;
+    (void)stop;
+    pose->facing = atan2f(d.x, d.z);  /* the movement: BtlAct_DashStrikeChaseSpeed, in the finisher (btl_act_a.c) */
+    pose->rot.y = pose->facing;
+}
+
+/* Whether the gauges stand still this frame, as the game holds ki (BtlAct_UpdateGauges): time stopped (a clash, an
+   animated blast), outside the fight's control (flag 3), hit-stop (0x125 / 0x126) or flag 0x128. With
+   stamina_freeze_in_animations the stamina then neither drains nor recovers. */
+static s32 BtlAct_GaugesFrozen(BtlActChr *chr) {
+    if (Port_ModValue("stamina_freeze_in_animations", 1.0f) == 0.0f) {
+        return 0;
+    }
+    return BtlChars_IsTimeStopped() || !BtlChar_TestFlag(chr, 3) || BtlChar_TestFlag(chr, 0x125) ||
+           BtlChar_TestFlag(chr, 0x126) || BtlChar_TestFlag(chr, 0x128);
+}
+
+/* Whether the fighter's stamina recovers this frame (BtlAct_UpdateGauges): with stamina_recover_still only while it
+   stands still, free (no attack, no dash) or charging ki, and moved less than stamina_still_move since the last
+   frame. */
+s32 BtlAct_StaminaRecovers(BtlActChr *chr) {
+    static Vec4 sLast[2];
+    static s32 sSeen[2];
+    s32 side = *(s32 *)chr & 1;
+    Vec4 *pos = &BtlChar_GetPos(chr)->pos;
+    f32 lim = Port_ModValue("stamina_still_move", 0.1f);
+    f32 dx = pos->x - sLast[side].x;
+    f32 dy = pos->y - sLast[side].y;
+    f32 dz = pos->z - sLast[side].z;
+    s32 still = sSeen[side] && dx * dx + dy * dy + dz * dz <= lim * lim;
+
+    sLast[side] = *pos;
+    sSeen[side] = 1;
+    if (Port_ModValue("stamina_recover_still", 1.0f) == 0.0f) {
+        return 1;
+    }
+    return still && (BtlChar_IsFree(chr) || BtlAct_GetCurrent(chr) == 0x37);
+}
+
+/* Whether Ultra Instinct keeps the fighter going though its stamina ran out (`out`: it did, this frame): every time
+   the stamina reaches 0 in Ultra Instinct counts once (it has to come back above 0 to count again); the
+   ultra_instinct_zero_limit-th time (10) the stamina-out happens as without it, and Ultra Instinct ends with every
+   form and mode. The count starts over whenever Ultra Instinct is off. */
+static s32 BtlAct_UltraInstinctHolds(BtlActChr *chr, s32 out) {
+    extern s32 BtlAct_ModeOn(BtlActChr *chr, s32 bit);
+    static s32 sCount[2];
+    static s32 sEmpty[2];
+    s32 side = chr->player & 1;
+    s32 limit = (s32)Port_ModValue("ultra_instinct_zero_limit", 10.0f);
+
+    if (!BtlAct_ModeOn(chr, 0x200)) {
+        sCount[side] = 0;
+        sEmpty[side] = 0;
+        return 0;
+    }
+    if (!out) {
+        sEmpty[side] = 0;
+        return 0;
+    }
+    if (!sEmpty[side]) {
+        sEmpty[side] = 1;
+        sCount[side]++;
+    }
+    return limit <= 0 || sCount[side] < limit;
+}
+
+/* Every frame: the slide of a busy dodge; during any dodge (steps 0x1B..0x1D, the sway 0x41, the slide) the
+   fighter keeps facing its opponent, so it comes out of the dodge facing it. */
+static void BtlAct_UltraInstinctSlideStep(BtlActChr *chr) {
+    f32 dx;
+    f32 dz;
+    s32 cur;
+
+    BtlAct_DashStrikeChase(chr);
+    {
+        extern s32 BtlInput_IsHeld(BtlActChr *chr, u32 mask);
+        extern s32 BtlInput_IsHeldNotPrev(BtlActChr *chr, u32 mask);
+        extern s32 BtlAct_HasModeAbility(BtlActChr *chr, s32 which);
+        extern s32 BtlMember_GetActiveChara(BtlActChr *chr);
+        extern void BtlAct_KaiokenChoose(BtlActChr *chr);
+
+        /* Mod "Ultra Instinct" v83: L2 + L1 picks the Kaioken level L2 + down + circle goes to */
+        if (BtlInput_IsHeld(chr, 0x200) && BtlInput_IsHeldNotPrev(chr, 0x4000) &&
+            (BtlAct_HasModeAbility(chr, 0) || BtlMember_GetActiveChara(chr) == 0x00)) {
+            BtlAct_KaiokenChoose(chr);
+        }
+    }
+    {
+        extern s32 BtlMember_StaminaTick(BtlActChr *chr);
+        extern void BtlAct_StaminaOut(BtlActChr *chr);
+        s32 act = BtlAct_GetCurrent(chr);
+
+        /* Mod "Ultra Instinct" v83: forms drain stamina; out of it, back to the base form once the fighter is free */
+        if (!BtlAct_GaugesFrozen(chr)) {
+            s32 out = BtlMember_StaminaTick(chr);
+
+            /* Mod "Ultra Instinct" v83: Ultra Instinct holds out (its zero limit) */
+            if (out && !BtlAct_UltraInstinctHolds(chr, out) && BtlChar_IsFree(chr) && (act < 0xEC || act > 0xF0)) {
+                BtlAct_StaminaOut(chr);
+            } else if (!out) {
+                BtlAct_UltraInstinctHolds(chr, 0);
+            }
+        }
+    }
+    if (BtlMember_SlideTake(chr, &dx, &dz)) {
+        BtlChar_GetPos(chr)->pos.x += dx;
+        BtlChar_GetPos(chr)->pos.z += dz;
+        BtlAct_UltraInstinctInvulnerable(chr);
+        BtlAct_UltraInstinctFace(chr);
+        return;
+    }
+    cur = BtlAct_GetCurrent(chr);
+    if (BtlMember_HasAbility(chr, BTL_ABILITY_ULTRA_INSTINCT) && ((cur >= 0x1B && cur <= 0x1D) || cur == 0x41)) {
+        BtlAct_UltraInstinctFace(chr);
+    }
+}
+
+/* Melee: rush chain, smashes, vanish attacks, finishers (0x44..0x66) and the generic attacks (0x70..0xAD). */
+static s32 BtlAct_IsUltraInstinctMelee(s32 action) {
+    return (action >= 0x44 && action <= 0x66) || (action >= 0x70 && action <= 0xAD);
+}
+#endif
+
 /*
  * Forced actions: turns fighter flags raised elsewhere (hits, grabs, scripted events) into action
  * requests. Runs every frame after the current handler's decide phase unless the handler set
@@ -702,6 +1074,32 @@ void BtlAct_CheckForced(BtlActChr *chr) {
     if (act->current == 0) {
         BtlAct_Request(chr, 0xB);
     }
+#ifdef PORT
+    BtlAct_DashCancel(chr);
+    if (BtlMember_HasAbility(chr, BTL_ABILITY_ULTRA_INSTINCT) && BtlChar_IsFree(chr)) {
+        switch (act->current) {
+        case 0x1B:
+        case 0x1C:
+        case 0x1D:
+        case 0x41:
+            if (chr->actionFrame < BTL_ULTRA_INSTINCT_INVULNERABLE) {
+                BtlAct_UltraInstinctInvulnerable(chr);
+            }
+            if (chr->actionFrame == 1) {
+                BtlAct_ClearQueue(chr);  /* nothing left over from before the dodge */
+            }
+            if (chr->actionFrame >= 1 && act->request == -1) {
+                if (!BtlAct_HasQueued(chr)) {
+                    BtlDecide_Attack(chr, 0x0800054F);  /* the attack inputs of the neutral action 0xB */
+                }
+                if (BtlAct_HasQueued(chr)) {
+                    BtlAct_Request(chr, BtlAct_GetQueued(chr));
+                }
+            }
+            break;
+        }
+    }
+#endif
     if (BtlChar_IsFree(chr)) {
         if (BtlChar_TestFlag(chr, 0x74)) {
             BtlAct_Request(chr, 0x21);
@@ -712,6 +1110,23 @@ void BtlAct_CheckForced(BtlActChr *chr) {
         if (BtlChar_TestFlag(chr, 0x76)) {
             BtlAct_Request(chr, 0x20);
         }
+#ifdef PORT
+        if (BtlMember_HasAbility(chr, BTL_ABILITY_ULTRA_INSTINCT)) {
+            if (BtlChar_TestFlag(chr, 0x74)) {
+                BtlAct_Request(chr, 0x1C);
+            }
+            if (BtlChar_TestFlag(chr, 0x75)) {
+                BtlAct_Request(chr, 0x1D);
+            }
+            if (BtlChar_TestFlag(chr, 0x76)) {
+                BtlAct_Request(chr, 0x1B);
+            }
+            if (BtlChar_TestFlag(chr, 0x74) || BtlChar_TestFlag(chr, 0x75) || BtlChar_TestFlag(chr, 0x76) ||
+                BtlChar_TestFlag(chr, 0x7D)) {
+                BtlAct_UltraInstinctInvulnerable(chr);
+            }
+        }
+#endif
         if (BtlChar_TestFlag(chr, 0x77)) {
             BtlDecide_QueueAttack(chr, BtlChar_IsStage4Or27() ? 0x7A : 0x79);
             BtlAct_Request(chr, BtlAct_GetQueued_(chr));
@@ -796,6 +1211,10 @@ typedef struct BtlActObj {
     /* 0xA40 */ u32 flags;
 } BtlActObj;
 
+#ifdef PORT
+extern s32 BtlAct_StaminaRecovers(BtlActChr *chr);  /* Mod "Ultra Instinct" v83 */
+#endif
+
 /*
  * Gauges, once per frame after the action's run phase. Nothing happens while time is stopped,
  * outside the fight state (flag 3), during hit-stop (flags 0x125 / 0x126) or under flag 0x128.
@@ -843,12 +1262,14 @@ void BtlAct_UpdateGauges(BtlActChr *chr) {
             BtlStat_EndKind3(chr);
         }
     }
+#ifndef PORT /* Mod "Ultra Instinct" v83: Kaioken drains no ki */
     if (BtlChar_TestFlag(chr, 0x98) && !BtlChar_TestFlag(chr, 0x99) && !BtlCharApi_IsInTechnique(chr->objId)) {
         BtlMember_SpendKi(chr, chr->unkE10, 0);
         if (BtlMember_IsKiEmpty(chr)) {
             BtlAct_EndFlag98(chr);
         }
     }
+#endif
     if (BtlChar_IsDead(chr)) {
         return;
     }
@@ -867,7 +1288,11 @@ void BtlAct_UpdateGauges(BtlActChr *chr) {
             if (BtlMember_HasKi(chr, BtlParam_GetGaugeB(chr))) {
                 BtlChar_ClearFlag(chr, 0xBE);
             }
+#ifdef PORT
+        } else {  /* also in Kaioken */
+#else
         } else if (!BtlChar_TestFlag(chr, 0x98)) {
+#endif
             if (!BtlMember_HasKi(chr, BtlParam_GetKiRegenLimit(chr))) {
                 BtlMember_AddKi(chr, BtlParam_GetKiRegenRate(chr));
             }
@@ -892,6 +1317,14 @@ void BtlAct_UpdateGauges(BtlActChr *chr) {
         }
     }
     if (mflags & 0x20000) {
+#ifdef PORT
+        if (!BtlAct_StaminaRecovers(chr)) {
+            /* moving, attacking: no stamina back (stamina_recover_still) */
+        } else if (BtlMember_HasAbility(chr, BTL_ABILITY_ULTRA_INSTINCT)) {
+            BtlMember_AddBlast(chr, (s32)(BtlParam_GetBlastGainRate(chr) *
+                                          Port_ModValue("ultra_instinct_refill", 5.0f / 4.0f)));  /* Mod "Ultra Instinct" v83 */
+        } else
+#endif
         BtlMember_AddBlast(chr, BtlParam_GetBlastGainRate(chr));
         if (Battle_GetMode() == 5 || Battle_GetMode() == 6) {
             BtlMember_AddBlast(chr, 0xD05);
@@ -955,6 +1388,26 @@ void BtlAct_UpdateGauges(BtlActChr *chr) {
     }
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v83: the rush counter (unkD60: the hit of the square rush, the 5th and 10th finish it) goes
+   back to 0 on the first frame out of the rush (flag 0x88). With the attacks sped up (Ultra Instinct, Super Speed,
+   Kaioken, power level) a hit is over before the next square press, and every press would start the rush over
+   (no finish: an endless chain). While the attacks are faster (rush_count_whole_combo) the count lasts as long as
+   the combo: until the opponent's combo hits (+0xD44, the HUD's count; 0 once its combo is over) go back to 0. */
+extern f32 BtlAnim_AttackRate(BtlActChr *chr);
+extern f32 Port_ModValue(const char *key, f32 def);
+
+static s32 BtlAct_RushLapsed(BtlActChr *chr, s32 inRush) {
+    if (inRush) {
+        return 0;
+    }
+    if (BtlAnim_AttackRate(chr) <= 1.01f || Port_ModValue("rush_count_whole_combo", 1.0f) == 0.0f) {
+        return 1;
+    }
+    return BtlChar_Get(BtlOpp_GetPlayer(chr))->unkD44 <= 0;
+}
+#endif
+
 /*
  * Timers and bookkeeping that run every frame after the gauges: flag-held state that lapses when
  * its flag is gone, stun and status countdowns, the last held direction, the action frame counter.
@@ -968,6 +1421,25 @@ void BtlAct_UpdateTimers(BtlActChr *chr) {
     s32 dir;
     s32 kind;
 
+#ifdef PORT
+    {  /* Mod "Ultra Instinct" v83: diagnostic debug_rush (mod_rush_log.txt) */
+        extern void Port_ModRushLog(s32 player, s32 action, s32 anim, s32 d60, s32 d64, s32 oppHits, s32 flags);
+        static s32 sLastAct[2] = { -1, -1 };
+        static s32 sLastAnim[2] = { -1, -1 };
+        s32 p = chr->player & 1;
+        s32 act = BtlAct_GetCurrent(chr);
+        s32 anim = BtlAnim_GetId(chr);
+
+        if (act != sLastAct[p] || anim != sLastAnim[p]) {
+            sLastAct[p] = act;
+            sLastAnim[p] = anim;
+            Port_ModRushLog(chr->player, act, anim, chr->unkD60, chr->unkD64, BtlChar_Get(BtlOpp_GetPlayer(chr))->unkD44,
+                            (BtlChar_TestFlag(chr, 0x5B) ? 0x10000 : 0) | (BtlChar_TestFlag(chr, 0x31) ? 0x1000 : 0) |
+                                (BtlChar_TestFlag(chr, 0x34) ? 0x100 : 0) | (BtlChar_TestFlag(chr, 0xE) ? 0x10 : 0) |
+                                (BtlChar_TestFlag(chr, 0x88) ? 1 : 0));
+        }
+    }
+#endif
     BtlMove_ApplyImpulse(chr);
     BtlMove_UpdateHoverOffset(chr);
     BtlMove_UpdateDefenseTimers(chr);
@@ -977,10 +1449,21 @@ void BtlAct_UpdateTimers(BtlActChr *chr) {
     if (BtlChars_IsTimeStopped()) {
         return;
     }
+#ifdef PORT
+    {
+        extern void BtlAct_UltraInstinctPotara(BtlActChr *chr);
+
+        BtlAct_UltraInstinctPotara(chr);  /* Mod "Ultra Instinct" v83: Ultra Instinct at low health with the potara */
+    }
+#endif
     if (!BtlChar_TestFlag(chr, 0x82)) {
         BtlChar_ClearFlag(chr, 0x8A);
     }
+#ifdef PORT
+    if (BtlAct_RushLapsed(chr, BtlChar_TestFlag(chr, 0x88))) {
+#else
     if (!BtlChar_TestFlag(chr, 0x88)) {
+#endif
         chr->unkD60 = 0;
         if (!(mflags & 2)) {
             BtlChar_ClearFlag(chr, 0x86);
@@ -1108,6 +1591,20 @@ void BtlAct_UpdateTimers(BtlActChr *chr) {
             chr->unkD88 = 0;
             break;
     }
+#ifdef PORT
+    BtlAct_UltraInstinctSlideStep(chr);  /* a busy Ultra Instinct fighter's slide */
+    Port_PowerReport(chr->side, BtlMember_PowerLevel(chr));  /* slower time for stronger fighters (plat_stub.c) */
+    /* Ultra Instinct: an attacker in a melee attack follows its dodging opponent (a sway or a step, also back) and
+       stays in front of it, as if the attack were landing. */
+    if (BtlOpp_HasAbility(chr, BTL_ABILITY_ULTRA_INSTINCT) && BtlAct_IsUltraInstinctMelee(BtlAct_GetCurrent_(chr)) &&
+        Port_ModValue("ultra_instinct_attacker_follows", 1.0f) != 0.0f) {
+        s32 oppAction = BtlOpp_GetSeenAction(chr);
+
+        if ((oppAction >= 0x1B && oppAction <= 0x1D) || oppAction == 0x41) {
+            BtlMove_WarpInFrontOfOpponent(chr, 0.0f);
+        }
+    }
+#endif
     kind = BtlOpp_GetParamByte2(chr);
     if (kind == 4) {
         if (BtlParam_GetUnk2(chr) == kind) {

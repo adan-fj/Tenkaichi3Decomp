@@ -539,7 +539,7 @@ void Num_DrawEx(Flash *flash, NumStyle *style, char *a, char *b, s32 value) {
 s32 ChrGrid_IsSelectable(ChrGridCell *cells, s32 index) {
     s32 ok = 1;
 
-    if (cells[index].id >= CHRGRID_ID_LOCKED) {
+    if (cells[index].id >= CHRGRID_ID_LOCKED && !(cells[index].id >= 0xA5 && cells[index].id <= 0xFE)) {
         ok = cells[index].id == CHRGRID_ID_CUSTOM;
     }
     return ok;
@@ -561,7 +561,7 @@ s32 ChrGrid_MoveRight(ChrGridCell *cells, s32 *col, s32 row) {
             break;
         }
         id = cells[row * CHRGRID_COLS + *col].id;
-        if (id < CHRGRID_ID_LOCKED) {
+        if (id < CHRGRID_ID_LOCKED || (id >= 0xA5 && id <= 0xFE)) {
             break;
         }
         if (id == CHRGRID_ID_CUSTOM) {
@@ -588,7 +588,7 @@ s32 ChrGrid_MoveLeft(ChrGridCell *cells, s32 *col, s32 row) {
             break;
         }
         id = cells[row * CHRGRID_COLS + *col].id;
-        if (id < CHRGRID_ID_LOCKED) {
+        if (id < CHRGRID_ID_LOCKED || (id >= 0xA5 && id <= 0xFE)) {
             break;
         }
         if (id == CHRGRID_ID_CUSTOM) {
@@ -609,7 +609,7 @@ void ChrGrid_MoveDown(ChrGridCell *cells, s32 *col, s32 *row, s32 rows) {
             *row = 0;
         }
         id = cells[*row * CHRGRID_COLS + *col].id;
-        if (id < CHRGRID_ID_LOCKED) {
+        if (id < CHRGRID_ID_LOCKED || (id >= 0xA5 && id <= 0xFE)) {
             return;
         }
         if (id == CHRGRID_ID_CUSTOM) {
@@ -628,7 +628,7 @@ void ChrGrid_MoveUp(ChrGridCell *cells, s32 *col, s32 *row, s32 rows) {
             *row = rows - 1;
         }
         id = cells[*row * CHRGRID_COLS + *col].id;
-        if (id < CHRGRID_ID_LOCKED) {
+        if (id < CHRGRID_ID_LOCKED || (id >= 0xA5 && id <= 0xFE)) {
             return;
         }
         if (id == CHRGRID_ID_CUSTOM) {
@@ -649,7 +649,7 @@ void ChrGrid_NextForm(s32 *forms, s32 *index) {
         if (start == *index) {
             break;
         }
-    } while (forms[*index] >= CHRGRID_ID_RANDOM);
+    } while (forms[*index] >= CHRGRID_ID_RANDOM && !(forms[*index] >= 0xA5 && forms[*index] <= 0xFE));
 }
 
 /* Steps to the previous form of a cell that is a character, wrapping in the seven slots. */
@@ -664,13 +664,13 @@ void ChrGrid_PrevForm(s32 *forms, s32 *index) {
         if (start == *index) {
             break;
         }
-    } while (forms[*index] >= CHRGRID_ID_RANDOM);
+    } while (forms[*index] >= CHRGRID_ID_RANDOM && !(forms[*index] >= 0xA5 && forms[*index] <= 0xFE));
 }
 
 /* Puts the cursor on a character if it is on a marker cell: right in the row first, then down.
  * Declared with a result that it never sets: the call of ChrGrid_MoveDown is not a tail call. */
 s32 ChrGrid_FixCursor(ChrGridCell *cells, s32 *col, s32 *row, s32 rows) {
-    if (cells[*row * CHRGRID_COLS + *col].id >= CHRGRID_ID_RANDOM) {
+    if (cells[*row * CHRGRID_COLS + *col].id >= CHRGRID_ID_RANDOM && !(cells[*row * CHRGRID_COLS + *col].id >= 0xA5 && cells[*row * CHRGRID_COLS + *col].id <= 0xFE)) {
         if (ChrGrid_MoveRight(cells, col, *row) == 0) {
             ChrGrid_MoveDown(cells, col, row, rows);
         }
@@ -760,7 +760,8 @@ void StgGrid_MoveUp(s32 *ids, s32 *col, s32 *row, s32 rows) {
     }
 }
 
-#define CHARA_UNLOCKED(id) ((s32)((SAVE_CHARA_WORD(gSaveData, id) >> ((id) % 64)) & 1))
+extern s32 Port_ModFighterBase(s32 chara);  /* Mod "Ultra Instinct" v83: an added fighter is always unlocked */
+#define CHARA_UNLOCKED(id) ((id) >= 0xA5 ? Port_ModFighterBase(id) >= 0 : (s32)((SAVE_CHARA_WORD(gSaveData, id) >> ((id) % 64)) & 1))
 
 /* Build flags of ChrGrid_Build. */
 #define CHRGRID_ALL 1        /* no unlock test (never set here) */

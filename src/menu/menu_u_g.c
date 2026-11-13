@@ -12,6 +12,16 @@ UEvoZ *gEvoZ = NULL;
  */
 
 /* Allocates the work area, loads the pack, builds the character grid and the item lists. */
+#ifdef PORT
+/* Mod "Ultra Instinct" v83: the added fighters in the roster (the versus select's cells, menu_c_e.c), their records
+   by fighter id (Port_SaveCustom, view_b_b.c), their portraits their slot's file 14. */
+extern void *Port_SaveCustom(s32 cell);
+extern void *CharSel_AddFighterCells(void *cells, s32 *count);
+extern void Port_SetGridCharas(void *cells, s32 count);
+extern void Port_SaveCustomWrite(void);
+extern s32 Port_CharaFileOr(s32 chara, s32 k, s32 id);
+#endif
+
 void EvoZ_Init(s32 section) {
     MTexRes *res = 0;
     s32 i;
@@ -19,7 +29,13 @@ void EvoZ_Init(s32 section) {
     gEvoZ = Heap_Alloc(sizeof(UEvoZ), 0x20, 0, 2);
     memset(gEvoZ, 0, sizeof(UEvoZ));
     EvoZ_Load(gEvoZ, section);
+#ifdef PORT
+    gEvoZ->grid = (UChrCell *)CharSel_AddFighterCells(gEvoZ->grid, &gEvoZ->gridCount);
+#endif
     ChrGrid_Build(&gEvoZ->cellCount, gEvoZ->cells, &gEvoZ->gridCount, gEvoZ->grid, 0, 0);
+#ifdef PORT
+    Port_SetGridCharas(gEvoZ->cells, gEvoZ->cellCount);
+#endif
     gEvoZ->gridCount = gEvoZ->cellCount;
     gEvoZ->grid = gEvoZ->cells;
     gEvoZ->rows = gEvoZ->gridCount / 7;
@@ -56,7 +72,11 @@ void EvoZ_Init(s32 section) {
         gEvoZ->list.top[i] = gEvoZ->list.cur[i];
         gEvoZ->list.bottom[i] = gEvoZ->list.cur[i] + gEvoZ->list.rows - 1;
     }
+#ifdef PORT
+    File_LoadSync(Port_CharaFileOr(gEvoZ->side->chara, 14, gEvoZ->side->chara + 0x2F9), gEvoZ->faceFile, 0x16800);
+#else
     File_LoadSync(gEvoZ->side->chara + 0x2F9, gEvoZ->faceFile, 0x16800);
+#endif
     Sprite_Unpack(gEvoZ->faceFile, gEvoZ->faceRes, 0);
     res = gEvoZ->faceRes;
     Res_RelocateOffsets(&res, res, res);
@@ -87,6 +107,10 @@ void EvoZ_Init(s32 section) {
 void EvoZ_Term(void) {
     s32 i;
 
+#ifdef PORT
+    Port_SaveCustomWrite();  /* Mod "Ultra Instinct" v83: the added fighters' records */
+    Port_SetGridCharas(NULL, 0);
+#endif
     PassWin_Term();
     Dialog_Term();
     ItemHelp_Term();
@@ -158,12 +182,12 @@ void EvoZ_Update(void) {
         if (gEvoZ->pay > 33) {
             gEvoZ->pay -= 33;
             gSaveData->money -= 33;
-            gSaveData->custom[gEvoZ->side->pick.col + gEvoZ->side->pick.row * 7].exp += 33;
-            gEvoZ->exp = gSaveData->custom[gEvoZ->side->pick.col + gEvoZ->side->pick.row * 7].exp;
+            (*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(gEvoZ->side->pick.col + gEvoZ->side->pick.row * 7)).exp += 33;
+            gEvoZ->exp = (*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(gEvoZ->side->pick.col + gEvoZ->side->pick.row * 7)).exp;
         } else {
             gSaveData->money -= gEvoZ->pay;
-            gSaveData->custom[gEvoZ->side->pick.col + gEvoZ->side->pick.row * 7].exp += gEvoZ->pay;
-            gEvoZ->exp = gSaveData->custom[gEvoZ->side->pick.col + gEvoZ->side->pick.row * 7].exp;
+            (*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(gEvoZ->side->pick.col + gEvoZ->side->pick.row * 7)).exp += gEvoZ->pay;
+            gEvoZ->exp = (*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(gEvoZ->side->pick.col + gEvoZ->side->pick.row * 7)).exp;
             gEvoZ->pay = 0;
             gEvoZ->expLeft = ChrTbl_GetMaxExp(gEvoZ->side->chara) - gEvoZ->exp;
             gEvoZ->flags ^= UEVOZ_PAYING;
@@ -174,7 +198,7 @@ void EvoZ_Update(void) {
             Flash_ClipGotoLabel(&gEvoZ->flash[0], &ref, "fl_ability_limit_up_in");
             gEvoZ->flags |= UEVOZ_LIMIT_UP;
             gEvoZ->state = 7;
-            gSaveData->custom[gEvoZ->side->pick.col + gEvoZ->side->pick.row * 7].level++;
+            (*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(gEvoZ->side->pick.col + gEvoZ->side->pick.row * 7)).level++;
             EvoZ_RefreshStatus(gEvoZ);
             Snd_PlaySe(2, 0x2F);
         } else {

@@ -13,13 +13,7 @@ run() { # the build of one variant; a compile failure must stop the release (und
     cat port/build/link_$BT3_CC.txt
 }
 mkdir -p port/build
-echo "== Linux"
-export BT3_CC=clang64
-run
-sh port/setup/build.sh
-python3 port/tools/package.py > port/build/package_linux.txt 2>&1 || { cat port/build/package_linux.txt; exit 1; }
-cat port/build/package_linux.txt
-grep -q "^portable: yes" port/build/package_linux.txt
+# (Ultra Instinct mod: Windows only)
 echo "== Windows"
 export BT3_CC=win64
 run

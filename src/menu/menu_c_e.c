@@ -116,6 +116,222 @@ void CharSel_SetStageChips(void) {
     }
 }
 
+
+/* Mod "Ultra Instinct" v83: fighters added from outside the disc (new_fighters.txt). The versus select lists each in a cell of its
+   own in front of the marker cells (random, custom) at the end of the master list; its chip is a copy of its base
+   fighter's, appended to the chip pack (so every chip lookup by id finds it); its portrait is its file 14. */
+extern s32 Port_ModFighterBase(s32 chara);
+extern s32 Port_ModFighterTop(void);
+extern s32 Port_CharaFileOr(s32 chara, s32 k, s32 id);
+static MChrCell sPortCells[MCHR_CELL_MAX];
+static u32 *sPortChips;
+
+extern s32 Port_ModFighterCell(s32 chara);
+extern s32 Port_ModFighterAt(s32 n);
+
+MChrCell *CharSel_AddFighterCells(MChrCell *cells, s32 *count) {
+    s32 n = *count;
+    s32 top = Port_ModFighterTop();
+    s32 at = n;
+    s32 out;
+    s32 c;
+    s32 i;
+
+    if (top <= 0xA5 || n <= 0 || n > MCHR_CELL_MAX) {
+        return cells;
+    }
+    while (at > 0 && cells[at - 1].id >= 0xA1 && cells[at - 1].id <= 0xA4) {
+        at--;
+    }
+    for (i = 0; i < at; i++) {
+        sPortCells[i] = cells[i];
+    }
+    out = at;
+    /* in new_fighters.txt's order: a fighter whose cell (Port_ModFighterCell) is another added fighter joins that
+       cell as a form (the cell made first, its own fighter as form 0); a cell of one fighter has no form list */
+    for (i = 0; (c = Port_ModFighterAt(i)) >= 0 && c < top; i++) {
+        s32 head = Port_ModFighterCell(c);
+        s32 k;
+
+        if (Port_ModFighterBase(c) < 0 || head < 0) {
+            continue;  /* (a hidden one: only techniques bring it in) */
+        }
+        if (head == c || Port_ModFighterBase(head) < 0) {
+            head = c;
+        }
+        for (k = at; k < out && sPortCells[k].id != head; k++) {
+        }
+        if (k == out) {
+            if (out >= MCHR_CELL_MAX - (n - at)) {
+                break;
+            }
+            memset(&sPortCells[out], 0, sizeof(MChrCell));
+            sPortCells[out].id = head;
+            sPortCells[out].form[0] = head;
+            out++;
+        }
+        if (head != c) {
+            MChrCell *cell = &sPortCells[k];
+
+            if (cell->formCount == 0) {
+                cell->formCount = 1;  /* its own fighter */
+            }
+            if (cell->formCount < 7) {
+                cell->form[cell->formCount++] = c;
+            }
+        }
+    }
+    for (i = at; i < n; i++) {
+        sPortCells[out++] = cells[i];
+    }
+    *count = out;
+    return sPortCells;
+}
+
+/* The chip pack with one list per added fighter (a copy of its base fighter's): the pack is copied into a buffer
+   of the game's heap with its offsets moved, then the copies appended; freed with the screen's archive. */
+extern s32 Port_ModFighterChip(s32 chara, u8 *out, s32 size);
+
+u32 *CharSel_ExtendChips(u32 *pack) {
+    u32 n = pack[0];
+    s32 top = Port_ModFighterTop();
+    u32 oldHead;
+    u32 newHead;
+    u32 dataSize;
+    u32 extra = 0;
+    u32 pos;
+    u8 *buf;
+    u32 *np;
+    s32 c;
+    u32 i;
+
+    /* a pack: count, the offsets of entries 1..count, the end; entry id + 1 is the chip of fighter id */
+    if (top <= (s32)n) {
+        return pack;
+    }
+    oldHead = (pack[1] >> 2) << 2;
+    newHead = (((u32)top + 2) * 4 + 0x3F) & ~0x3F;
+    dataSize = ((pack[n + 1] >> 2) << 2) - oldHead;
+    for (c = (s32)n; c < top; c++) {
+        s32 b = Port_ModFighterBase(c);
+        s32 own = Port_ModFighterChip(c, NULL, 0);  /* its own chip (BT4's), when it has one */
+
+        if (own > 0) {
+            extra += (u32)own;
+            continue;
+        }
+        if (b < 0 || b >= (s32)n) {
+            b = 0;
+        }
+        extra += ((pack[b + 2] >> 2) << 2) - ((pack[b + 1] >> 2) << 2);
+    }
+    buf = (u8 *)Heap_Alloc((s32)(newHead + dataSize + extra + 0x40), 0x40, 0, 2);
+    if (buf == NULL) {
+        return pack;
+    }
+    np = (u32 *)buf;
+    memset(buf, 0, newHead);
+    np[0] = (u32)top;
+    for (i = 1; i <= n; i++) {
+        np[i] = ((pack[i] >> 2) << 2) - oldHead + newHead;
+    }
+    memcpy(buf + newHead, (u8 *)pack + oldHead, dataSize);
+    pos = newHead + dataSize;
+    for (c = (s32)n; c < top; c++) {
+        s32 b = Port_ModFighterBase(c);
+        u32 from;
+        u32 size;
+
+        if (b < 0 || b >= (s32)n) {
+            b = 0;
+        }
+        np[c + 1] = pos;
+        {
+            s32 own = Port_ModFighterChip(c, buf + pos, 0x10000);
+
+            if (own > 0) {
+                pos += (u32)own;
+                continue;
+            }
+        }
+        from = (pack[b + 1] >> 2) << 2;
+        size = ((pack[b + 2] >> 2) << 2) - from;
+        memcpy(buf + pos, (u8 *)pack + from, size);
+        pos += size;
+    }
+    np[top + 1] = pos;
+    if (sPortChips != NULL) {
+        Heap_Free(sPortChips);
+    }
+    sPortChips = np;
+    return np;
+}
+
+/* Mod "Ultra Instinct" v83: a text list of the select screen (section 43 names, 44 forms: count, the offsets of entries
+   0..count-1 and the end, UTF-16 strings) copied with an entry per added fighter (Port_ModFighterText, 64 bytes
+   each; an added slot inside the list is written over in place); freed with the screen's archive. */
+extern s32 Port_ModFighterText(s32 chara, s32 which, u8 *out, s32 size);
+static u32 *sPortTexts[2];
+
+void *CharSel_ExtendText(void *text, s32 which) {
+    u32 *pack = (u32 *)text;
+    u32 n = pack[0];
+    s32 top = Port_ModFighterTop();
+    u32 count = (s32)n > top ? n : (u32)top;
+    u32 oldHead;
+    u32 newHead;
+    u32 dataSize;
+    u32 pos;
+    u8 *buf;
+    u32 *np;
+    u32 i;
+    s32 c;
+
+    if (top <= 0xA5 || n == 0 || n > 4096) {
+        return text;
+    }
+    oldHead = (pack[1] >> 2) << 2;
+    newHead = ((count + 2) * 4 + 0x3F) & ~0x3Fu;
+    dataSize = ((pack[n + 1] >> 2) << 2) - oldHead;
+    buf = (u8 *)Heap_Alloc((s32)(newHead + dataSize + (count - n) * 64 + 0x40), 0x40, 0, 2);
+    if (buf == NULL) {
+        return text;
+    }
+    np = (u32 *)buf;
+    memset(buf, 0, newHead);
+    np[0] = count;
+    for (i = 0; i <= n; i++) {
+        np[1 + i] = ((pack[1 + i] >> 2) << 2) - oldHead + newHead;
+    }
+    memcpy(buf + newHead, (u8 *)pack + oldHead, dataSize);
+    pos = newHead + dataSize;
+    for (i = n; i < count; i++) {
+        np[1 + i] = pos;
+        memset(buf + pos, 0, 64);
+        pos += 64;
+    }
+    np[1 + count] = pos;
+    for (c = 0xA5; c < top; c++) {
+        u32 at = np[1 + c];
+        u32 room = np[2 + c] - at;
+
+        if (room >= 8) {
+            u8 tmp[64];
+            s32 len = Port_ModFighterText(c, which, tmp, room < 64 ? (s32)room : 64);
+
+            if (len > 0) {
+                memset(buf + at, 0, room);
+                memcpy(buf + at, tmp, (u32)len);
+            }
+        }
+    }
+    if (sPortTexts[which] != NULL) {
+        Heap_Free(sPortTexts[which]);
+    }
+    sPortTexts[which] = np;
+    return np;
+}
+
 /* The seven chips of a side's reel show the cursor's row of the character grid. */
 void CharSel_SetRowChips(s32 side) {
     s32 slot[7] = { 8, 11, 12, 13, 14, 15, 16 };
@@ -213,7 +429,8 @@ void CharSel_UpdateFaceLoad(void) {
         break;
     case CHARSEL_LOAD_REQUEST:
         File_CancelRequests();
-        File_Request(gCharSel->side[gCharSel->faceSide]->chara + CHARSEL_FACE_FILE,
+        File_Request(Port_CharaFileOr(gCharSel->side[gCharSel->faceSide]->chara, 14,
+                                      gCharSel->side[gCharSel->faceSide]->chara + CHARSEL_FACE_FILE),
                      gCharSel->faceFile[gCharSel->faceSide], 0x16800);
         gCharSel->faceState = CHARSEL_LOAD_READ;
         break;
@@ -522,10 +739,10 @@ void CharSel_Init(s32 section) {
     IconWin_Init(MPACK_AT(gCharSel->res, 54), res);
     gCharSel->unk3A48 = MPACK_AT(gCommonRes->data[2], 2);
 
-    gCharSel->nameText = MPACK_AT(gCharSel->res, 43);
-    gCharSel->formText = MPACK_AT(gCharSel->res, 44);
-    gCharSel->chipPack = (u32 *)MPACK_AT(gCharSel->res, 45);
-    for (i = 0; i < MCHR_CELL_MAX; i++) {
+    gCharSel->nameText = CharSel_ExtendText(MPACK_AT(gCharSel->res, 43), 0);  /* Mod "Ultra Instinct" v83: + the added fighters */
+    gCharSel->formText = CharSel_ExtendText(MPACK_AT(gCharSel->res, 44), 1);
+    gCharSel->chipPack = CharSel_ExtendChips((u32 *)MPACK_AT(gCharSel->res, 45));  /* Mod "Ultra Instinct" v83 */
+    for (i = 0; i < (s32)gCharSel->chipPack[0]; i++) {
         CS_RES(gCharSel->chipPack, i + 1);
     }
     gCharSel->stagePack = (u32 *)MPACK_AT(gCharSel->res, 46);
@@ -660,6 +877,7 @@ void CharSel_Init(s32 section) {
 
     gCharSel->cells[0] = (MChrCell *)(MPACK_AT(gCharSel->res, 42) + 0x10);
     gCharSel->masterCount[0] = MPACK_WORD(gCharSel->res, 42);
+    gCharSel->cells[0] = CharSel_AddFighterCells(gCharSel->cells[0], &gCharSel->masterCount[0]);  /* Mod "Ultra Instinct" v83 */
     gCharSel->cells[1] = gCharSel->cells[0];
     gCharSel->masterCount[1] = gCharSel->masterCount[0];
     for (i = 0, cols = MCHR_COLS; i < CHARSEL_SIDES; i++) {
@@ -672,6 +890,13 @@ void CharSel_Init(s32 section) {
             gCharSel->rows[i]++;
         }
     }
+#ifdef PORT
+    {
+        extern void Port_SetGridCharas(void *cells, s32 count);
+
+        Port_SetGridCharas(gCharSel->grid[0], gCharSel->cellCount[0]);  /* Mod "Ultra Instinct" v83: the added fighters' records */
+    }
+#endif
 
     gCharSel->faceFile[0] = Heap_Alloc(0x16800, 0x40, 0, 2);
     gCharSel->faceFile[1] = Heap_Alloc(0x16800, 0x40, 0, 2);
@@ -718,7 +943,8 @@ void CharSel_Init(s32 section) {
     gCharSel->stage->bgmPlaying = gCharSel->stage->bgm;
 
     for (i = 0; i < CHARSEL_SIDES; i++) {
-        File_LoadSync(gCharSel->side[i]->chara + CHARSEL_FACE_FILE, gCharSel->faceFile[i], 0x16800);
+        File_LoadSync(Port_CharaFileOr(gCharSel->side[i]->chara, 14, gCharSel->side[i]->chara + CHARSEL_FACE_FILE),
+                      gCharSel->faceFile[i], 0x16800);
         Sprite_Unpack(gCharSel->faceFile[i], gCharSel->faceRes[i], NULL);
         res = gCharSel->faceRes[i];
         Res_RelocateOffsets(&res, res, res);
@@ -751,7 +977,18 @@ void CharSel_Init(s32 section) {
 }
 
 /* Frees the screen: the windows, the movies, the picture buffers and the work area. */
+#ifdef PORT
+extern void *Port_SaveCustom(s32 cell);  /* Mod "Ultra Instinct" v83: a cell's customisation record (view_b_b.c) */
+#endif
+
 void CharSel_Term(void) {
+#ifdef PORT
+    {
+        extern void Port_SetGridCharas(void *cells, s32 count);
+
+        Port_SetGridCharas(NULL, 0);  /* Mod "Ultra Instinct" v83 */
+    }
+#endif
     s32 i;
 
 #ifdef PORT
@@ -792,6 +1029,18 @@ void CharSel_Term(void) {
     if (gCharSel->faceFile[0] != NULL) {
         Heap_Free(gCharSel->faceFile[0]);
         gCharSel->faceFile[0] = NULL;
+    }
+    if (sPortChips != NULL) {  /* Mod "Ultra Instinct" v83 */
+        Heap_Free(sPortChips);
+        sPortChips = NULL;
+    }
+    if (sPortTexts[0] != NULL) {
+        Heap_Free(sPortTexts[0]);
+        sPortTexts[0] = NULL;
+    }
+    if (sPortTexts[1] != NULL) {
+        Heap_Free(sPortTexts[1]);
+        sPortTexts[1] = NULL;
     }
     if (gCharSel->res != NULL) {
         Heap_Free(gCharSel->res);
@@ -1690,7 +1939,7 @@ void CharSel_Input(s32 *running) {
                         if (CS_CELL.id == MCHR_CUSTOM) {
                             CS_SIDE->items = CSSAVE->rec[CS_SIDE->customCol + CS_SIDE->customRow * 7].items;
                         } else {
-                            CS_SIDE->items = CSSAVE->custom[CS_SIDE->col + CS_SIDE->row * 7].set[CS_SIDE->customPlate - 1];
+                            CS_SIDE->items = (*(__typeof__(&CSSAVE->custom[0]))Port_SaveCustom(CS_SIDE->col + CS_SIDE->row * 7)).set[CS_SIDE->customPlate - 1];
                         }
                     } else {
                         memset(&CS_SIDE->items, 0, 0x10);
@@ -1724,7 +1973,7 @@ void CharSel_Input(s32 *running) {
                         n = CS_SIDE->col + CS_SIDE->row * 7;
                     }
                     if (CS_SIDE->customPlate != 0) {
-                        CS_SIDE->items = CSSAVE->custom[n].set[CS_SIDE->customPlate - 1];
+                        CS_SIDE->items = (*(__typeof__(&CSSAVE->custom[0]))Port_SaveCustom(n)).set[CS_SIDE->customPlate - 1];
                     } else {
                         memset(&CS_SIDE->items, 0, 0x10);
                     }

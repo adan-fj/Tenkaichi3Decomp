@@ -16,6 +16,53 @@ extern void *memset(void *dst, s32 c, u32 n);
 #define CHRTBL_FILE ((ChrTblFile *)gCommonRes->data[2])
 #define CHRTBL_SECTION(file, ofs) ((u8 *)(file) + (((file)->ofs >> 2) << 2))
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v83: the customisation records (item sets, level, experience). The save has one per cell of the
+   disc's character grid (SAVE_CUSTOM_COUNT); the fighters added from outside the disc have theirs by fighter id in
+   custom_added.bin next to the program (read the first time, written when the customising screen closes). The
+   screens that list added fighters (the versus select, the customising screen) say which cell of their grid is
+   which added fighter (Port_SetGridCharas; none = every cell is the disc's). */
+extern s32 Port_ModCustomFile(u8 *buf, s32 size, s32 write);
+static SaveCustom sPortCustom[0x100 - 0xA5];
+static SaveCustom sPortCustomNone;
+static s32 sPortCustomLoaded;
+static s32 sPortCellChara[256];
+
+void Port_SetGridCharas(void *cells, s32 count) {
+    s32 i;
+
+    memset(sPortCellChara, 0, sizeof(sPortCellChara));
+    for (i = 0; cells != NULL && i < count && i < 256; i++) {
+        s32 id = *(s32 *)((u8 *)cells + i * 0x24);  /* a grid cell: id, form count, forms (0x24 bytes) */
+
+        sPortCellChara[i] = (id >= 0xA5 && id < 0x100) ? id : 0;
+    }
+}
+
+void *Port_SaveCustom(s32 cell) {
+    s32 c = (cell >= 0 && cell < 256) ? sPortCellChara[cell] : 0;
+
+    if (c != 0) {
+        if (!sPortCustomLoaded) {
+            sPortCustomLoaded = 1;
+            Port_ModCustomFile((u8 *)sPortCustom, sizeof(sPortCustom), 0);
+        }
+        return &sPortCustom[c - 0xA5];
+    }
+    if (cell >= 0 && cell < SAVE_CUSTOM_COUNT) {
+        return gSaveData->custom + cell;
+    }
+    memset(&sPortCustomNone, 0, sizeof(sPortCustomNone));
+    return &sPortCustomNone;
+}
+
+void Port_SaveCustomWrite(void) {
+    if (sPortCustomLoaded) {
+        Port_ModCustomFile((u8 *)sPortCustom, sizeof(sPortCustom), 1);
+    }
+}
+#endif
+
 /* Returns the character's number of costumes, and sets *costume to 0 if it is not one of them. */
 s32 ChrTbl_WrapCostume(s32 chara, s32 *costume) {
     ChrTblFile *file = CHRTBL_FILE;
@@ -44,7 +91,7 @@ s32 ChrTbl_GetLevel(s32 chara, s32 slot, s32 fromRec) {
     if (fromRec != 0) {
         level = gSaveData->rec[slot].level;
     } else {
-        level = gSaveData->custom[slot].level;
+        level = (*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(slot)).level;
     }
     file = CHRTBL_FILE;
     table = (ChrTblEntry *)CHRTBL_SECTION(file, charaOffset);
@@ -56,7 +103,7 @@ s32 ChrTbl_GetExp(s32 chara, s32 slot) {
     ChrTblFile *file = CHRTBL_FILE;
     ChrTblEntry *table = (ChrTblEntry *)CHRTBL_SECTION(file, charaOffset);
 
-    return table[chara].exp[gSaveData->custom[slot].level];
+    return table[chara].exp[(*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(slot)).level];
 }
 
 /* The last experience value of the character's list. */

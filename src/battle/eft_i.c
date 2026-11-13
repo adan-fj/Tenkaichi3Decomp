@@ -1155,6 +1155,37 @@ void EftEmit_UpdateNodesReq(EftOwner *owner, EftEmitNodes *nodes) {
     EftEmit_UpdateNodes(owner, nodes, req);
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v83: the node of phase `i` that the motions did not mark (0: the root, at the feet), for a
+   technique whose effect a swap replaced (Port_ModFxSwapped): the node of the last phase that was marked, else both
+   hands. Its motions mark the phases of their own technique, not the ones of the effect it now plays. */
+extern s32 Port_ModFxSwapped(s32 chara, s32 slot);
+extern s32 BtlCharApi_GetChara(s32 objId);
+extern s32 EftShot_GetCurSlot(s32 chr);
+
+static void EftEmit_SwappedNode(s32 objId, EftEmitNodes *nodes, s32 i) {
+    s32 slot = EftShot_GetCurSlot(objId);
+    s32 j;
+
+    if (slot < 2 || !Port_ModFxSwapped(BtlCharApi_GetChara(objId), slot - 2)) {
+        return;
+    }
+    for (j = i - 1; j >= 0; j--) {
+        if ((nodes->flags & (1 << (j * 2))) && (nodes->n[j][0].id != 0 || (nodes->flags & (1 << (j * 2 + 1))))) {
+            nodes->n[i][0].id = nodes->n[j][0].id;
+            if (nodes->flags & (1 << (j * 2 + 1))) {
+                nodes->flags |= 1 << (i * 2 + 1);
+                nodes->n[i][1].id = nodes->n[j][1].id;
+            }
+            return;
+        }
+    }
+    nodes->flags |= 1 << (i * 2 + 1);  /* both hands */
+    nodes->n[i][0].id = 0x2D;
+    nodes->n[i][1].id = 0x1F;
+}
+#endif
+
 /* Resolves each node slot the first time its request bit is seen, then samples the node positions.
    Request 0x400 freezes the slots (flag 0x1000) for good. */
 void EftEmit_UpdateNodes(EftOwner *owner, EftEmitNodes *nodes, s32 req) {
@@ -1198,6 +1229,11 @@ void EftEmit_UpdateNodes(EftOwner *owner, EftEmitNodes *nodes, s32 req) {
                     } else {
                         nodes->n[i][0].id = EftShot_GetAttrKind(objId, bits[i]);
                     }
+#ifdef PORT
+                    if (!(nodes->flags & (1 << (i * 2 + 1))) && nodes->n[i][0].id == 0) {
+                        EftEmit_SwappedNode(objId, nodes, i);  /* Mod "Ultra Instinct" v83 */
+                    }
+#endif
                 }
             }
             if (nodes->flags & (1 << (i * 2))) {

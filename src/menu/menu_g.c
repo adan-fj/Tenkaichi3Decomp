@@ -294,6 +294,10 @@ typedef struct ItemPanelSave {
 
 #define IP_SAVE ((ItemPanelSave *)gSaveData)
 
+#ifdef PORT
+extern void *Port_SaveCustom(s32 cell);  /* Mod "Ultra Instinct" v83: a cell's customisation record (view_b_b.c) */
+#endif
+
 /* Loads the set to show: item set `set` of custom slot `slot`, or the set of saved record `slot`. */
 void ItemPanel_SetChara(s32 side, s32 chara, s32 slot, s32 set, s32 fromRec) {
     ItemPanel *p = gItemPanel[side];
@@ -301,7 +305,7 @@ void ItemPanel_SetChara(s32 side, s32 chara, s32 slot, s32 set, s32 fromRec) {
     if (fromRec) {
         p->item = IP_SAVE->rec[slot].set;
     } else {
-        p->item = IP_SAVE->custom[slot].set[set];
+        p->item = (*(__typeof__(&IP_SAVE->custom[0]))Port_SaveCustom(slot)).set[set];
     }
     p->chara = chara;
     p->set = set + 1;

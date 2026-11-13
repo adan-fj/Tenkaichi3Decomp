@@ -1,5 +1,10 @@
 #include "common.h"
 #include "battle/btl_char_fx.h"
+extern s32 Port_CharaFileOr(s32 chara, s32 k, s32 id);
+extern s32 Port_CharaOfFile(s32 id);
+extern s32 Port_CharaVoice(s32 chara);
+extern s32 Port_ModFighterBase(s32 chara);
+extern s32 Port_ModFighterTop(void);
 
 /*
  * Fighter effect requests, part 3: 0x1D1EC8..0x1D3B40.
@@ -446,6 +451,32 @@ void BtlFx_UpdateObjEvents(FxChr *chr) {
 void BtlFx_UpdateAll(FxChr *chr) {
     FxObj *obj = BtlChar_GetObj(chr);
 
+#ifdef PORT
+    {
+        extern f32 Port_ModValue(const char *key, f32 def);
+        extern void Port_ModDebugFx(s32 player, s32 action, s32 anim, u32 lo, u32 hi, u32 objFlags, s32 aura);
+        extern s32 BtlCharApi_GetAuraType(s32 objId);
+
+        if (Port_ModValue("debug_kaioken_fx", 0.0f) != 0.0f &&  /* Mod "Ultra Instinct" v83 */
+            (BtlChar_TestFlag(chr, 0x98) ||
+             (BtlCharApi_IsInSkill(chr->objId) && BtlSkill_GetId(chr, BtlAct_GetCurrentClass(chr)) == 0x18))) {
+            u32 lo = 0;
+            u32 hi = 0;
+            s32 n;
+
+            for (n = 0; n < 32; n++) {
+                if (BtlChar_TestFxBit(chr, n)) {
+                    lo |= 1u << n;
+                }
+                if (BtlChar_TestFxBit(chr, n + 32)) {
+                    hi |= 1u << n;
+                }
+            }
+            Port_ModDebugFx(chr->player, BtlAct_GetCurrent(chr), BtlAnim_GetId(chr), lo, hi, obj->flags,
+                            BtlCharApi_GetAuraType(chr->objId));
+        }
+    }
+#endif
     BtlFx_UpdateAura(chr);
     BtlFx_UpdateChargeFx(chr);
     BtlChar_SpawnFxBits3C(chr);
@@ -645,7 +676,7 @@ void BtlPartner_HandleEvents(FxObj *obj, FxChr *chr) {
         }
     }
     if (kind >= 0) {
-        BtlCharSnd_RequestAt(&pos, 7, sound + obj->chara * 100 + kind, 200.0f, 1500.0f);
+        BtlCharSnd_RequestAt(&pos, 7, sound + Port_CharaVoice(obj->chara) * 100 + kind, 200.0f, 1500.0f);
     }
     if (mask >= 0) {
         BtlObj_SetSubState(obj, 2, mask);
@@ -663,11 +694,11 @@ void BtlPartner_HandleEvents(FxObj *obj, FxChr *chr) {
     }
     if (on >= 0) {
         if (BtlObjAnim_TestEvent(obj, 0x8000)) {
-            BtlCharSnd_RequestAt(&pos, 7, sound + *BtlMember_GetActive(chr) * 100 + on, 200.0f, 1500.0f);
+            BtlCharSnd_RequestAt(&pos, 7, sound + Port_CharaVoice(*BtlMember_GetActive(chr)) * 100 + on, 200.0f, 1500.0f);
             BtlObj_SetSubState(obj, 2, on);
         }
         if (BtlObjAnim_TestEvent(obj, 0x8000000000)) {
-            BtlCharSnd_RequestAt(&pos, 7, sound + (on + *BtlMember_GetActive(chr) * 100) + 1, 200.0f, 1500.0f);
+            BtlCharSnd_RequestAt(&pos, 7, sound + (on + Port_CharaVoice(*BtlMember_GetActive(chr)) * 100) + 1, 200.0f, 1500.0f);
             BtlObj_SetSubState(obj, 2, on + 1);
         }
     }

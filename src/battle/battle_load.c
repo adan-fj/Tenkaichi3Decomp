@@ -18,6 +18,35 @@
 /* (70000: past the end of the second archive, which has 65,201 files. It was 30000, taken for free; those are
    the training mode's guide voice lines, and with n stages added the first n of them were replaced by stage
    files. Found 2026-10-08 while listing the file ids for added characters.) */
+
+/* Mod "Ultra Instinct" v83: fighters added from outside the disc (new_fighters.txt, slots 0xA5..): their files are 16 numbers each in
+   partition 2 past its end (pzs3us2/80000 + (slot - 0xA5) * 16 + k: 0..3 costumes, 4..7 damaged, 8 animations,
+   9 effects, 10 / 11 voice banks, 12 / 13 per-side data, 14 portrait), written by build_mod.py. */
+#define PORT_CHARA_FIRST 0xA5
+#define PORT_CHARA_FILE (0xD48 + 80000)
+extern s32 Port_ModFighterBase(s32 chara);
+s32 Port_CharaFileOr(s32 chara, s32 k, s32 id) {
+    if (chara >= PORT_CHARA_FIRST && chara < 0x100 && Port_ModFighterBase(chara) >= 0) {
+        return PORT_CHARA_FILE + (chara - PORT_CHARA_FIRST) * 16 + k;
+    }
+    return id;
+}
+
+/* The fighter of a model file (BtlObj_Setup). */
+s32 Port_CharaOfFile(s32 id) {
+    if (id >= PORT_CHARA_FILE && id < PORT_CHARA_FILE + (0x100 - PORT_CHARA_FIRST) * 16) {
+        return PORT_CHARA_FIRST + (id - PORT_CHARA_FILE) / 16;
+    }
+    return (id - 0x590) / 10;
+}
+
+/* The fighter whose voice lines an added fighter speaks (its base); any other its own. */
+s32 Port_CharaVoice(s32 chara) {
+    s32 b = chara >= PORT_CHARA_FIRST ? Port_ModFighterBase(chara) : -1;
+
+    return b >= 0 ? b : chara;
+}
+
 #define PORT_ADDED_STAGE_FILE(stage) (0xD48 + 70000 + ((stage) - 0x24))
 #define BTL_STAGE_MODEL(stage) ((stage) >= 0x24 ? PORT_ADDED_STAGE_FILE(stage) : (stage) + BTL_FILE_STAGE)
 #define BTL_STAGE_BANK(stage) (((stage) >= 0x24 ? 0 : (stage)) + BTL_FILE_SND_STAGE)
@@ -334,6 +363,9 @@ s32 BtlLoad_StepObject(BtlJob *job) {
                 id = job->chara * 10 + job->animChara + BTL_FILE_CHARA;
             }
         }
+        if (job->chara < 0x100) {  /* Mod "Ultra Instinct" v83: an added fighter's model */
+            id = Port_CharaFileOr(job->chara, job->animChara + (job->unk1C != 0 ? 4 : 0), id);
+        }
         gBtlLoadHandle = BtlRes_Request(0, id, -1, -1);
         job->state++;
         return 0;
@@ -402,10 +434,14 @@ s32 BtlLoad_StepChara(BtlJob *job) {
         } else {
             model = job->chara * 10 + job->costume + BTL_FILE_CHARA;
         }
+        model = Port_CharaFileOr(job->chara, job->costume + (job->variant != 0 ? 4 : 0), model);  /* Mod "Ultra Instinct" v83 */
         if (job->modelOnly == 0) {
             file8 = job->animChara * 10 + (BTL_FILE_CHARA + 8);
             file9 = job->unk1C * 10 + (BTL_FILE_CHARA + 9);
             voice = job->voiceChara + ((gSaveData->flags & SAVE_FLAG_VOICE) ? BTL_FILE_VOICE_ALT : BTL_FILE_VOICE);
+            file8 = Port_CharaFileOr(job->animChara, 8, file8);
+            file9 = Port_CharaFileOr(job->unk1C, 9, file9);
+            voice = Port_CharaFileOr(job->voiceChara, (gSaveData->flags & SAVE_FLAG_VOICE) ? 11 : 10, voice);
             BtlRes_Reload(BattleSide_GetModelSlot(job->side), model, file8, file9);
             res->bank = File_Request3(voice, res->bank, res->bankSize);
             if (!BtlCtrl_IsSwitching(job->side)) {
@@ -416,7 +452,7 @@ s32 BtlLoad_StepChara(BtlJob *job) {
                     member = BtlSide_GetActiveMember(job->side);
                 }
                 next = BattleSide_GetMember(job->side, member);
-                next->buf[1] = File_Request3(job->chara * 2 + job->side + BTL_FILE_CHARA_DATA, next->buf[1], BTL_MEMBER_BUF_SIZE);
+                next->buf[1] = File_Request3(Port_CharaFileOr(job->chara, 12 + job->side, job->chara * 2 + job->side + BTL_FILE_CHARA_DATA), next->buf[1], BTL_MEMBER_BUF_SIZE);
             }
         } else {
             BtlRes_Reload(BattleSide_GetModelSlot(job->side), model, -1, -1);
@@ -500,8 +536,8 @@ s32 BtlLoad_StepInitial(BtlJob *job) {
     case 0:
         res->sndCommon = File_Request3(BTL_FILE_SND_COMMON, NULL, 0);
         res->sndStage = File_Request3(BTL_STAGE_BANK(Battle_GetStartStage()), NULL, 0);
-        res->sndChara[0] = File_Request3(BattleSide_GetStartChara(0) + ((gSaveData->flags & SAVE_FLAG_VOICE) ? BTL_FILE_VOICE_ALT : BTL_FILE_VOICE), NULL, 0);
-        res->sndChara[1] = File_Request3(BattleSide_GetStartChara(1) + ((gSaveData->flags & SAVE_FLAG_VOICE) ? BTL_FILE_VOICE_ALT : BTL_FILE_VOICE), NULL, 0);
+        res->sndChara[0] = File_Request3(Port_CharaFileOr(BattleSide_GetStartChara(0), (gSaveData->flags & SAVE_FLAG_VOICE) ? 11 : 10, BattleSide_GetStartChara(0) + ((gSaveData->flags & SAVE_FLAG_VOICE) ? BTL_FILE_VOICE_ALT : BTL_FILE_VOICE)), NULL, 0);
+        res->sndChara[1] = File_Request3(Port_CharaFileOr(BattleSide_GetStartChara(1), (gSaveData->flags & SAVE_FLAG_VOICE) ? 11 : 10, BattleSide_GetStartChara(1) + ((gSaveData->flags & SAVE_FLAG_VOICE) ? BTL_FILE_VOICE_ALT : BTL_FILE_VOICE)), NULL, 0);
         job->state++;
         return 0;
     case 1:
@@ -590,7 +626,7 @@ s32 BtlLoad_StepInitial(BtlJob *job) {
         for (side = 0; side < 2; side++) {
             for (i = 0; (u32)i < (u32)BattleSide_GetMemberCount(side); i++) {
                 m = BattleSide_GetMember(side, i);
-                m->buf[0] = File_Request3(m->chara * 2 + side + BTL_FILE_CHARA_DATA, m->buf[0], BTL_MEMBER_BUF_SIZE);
+                m->buf[0] = File_Request3(Port_CharaFileOr(m->chara, 12 + side, m->chara * 2 + side + BTL_FILE_CHARA_DATA), m->buf[0], BTL_MEMBER_BUF_SIZE);
             }
         }
         res->unk8 = File_Request3(gProgress->unk0[0] + 6, NULL, 0);
@@ -2008,5 +2044,8 @@ void BattleSide_SetMemberItems(s32 side, s32 idx, BattleItemSet *items) {
 s32 BattleSide_IsCharaUsable(s32 side, s32 chara) {
     u64 *bits = Side(side)->charaBits.bits;
 
+    if (chara >= 0xA5 && chara < 0x100) {  /* Mod "Ultra Instinct" v83: an added fighter (new_fighters.txt) */
+        return Port_ModFighterBase(chara) >= 0;
+    }
     return (bits[chara / 64] >> (chara % 64)) & 1;
 }

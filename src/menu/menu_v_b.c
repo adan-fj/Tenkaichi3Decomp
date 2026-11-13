@@ -10,6 +10,11 @@
  */
 
 /* Sends one of the screen's clips to a label of its timeline. */
+#ifdef PORT
+extern void *Port_SaveCustom(s32 cell);  /* Mod "Ultra Instinct" v83 */
+extern s32 Port_CharaFileOr(s32 chara, s32 k, s32 id);
+#endif
+
 void EvoZ_ClipGoto(EvoZ *ez, s32 flash, s32 kind, s32 sub, char *label) {
     MFlashRef ref;
     char name[64];
@@ -46,7 +51,7 @@ void EvoZ_ClipGoto(EvoZ *ez, s32 flash, s32 kind, s32 sub, char *label) {
 }
 
 #define EZ_CELL (ez->side->col + ez->side->row * 7)
-#define EZ_SET (VSAVE->custom[EZ_CELL].set[ez->set])
+#define EZ_SET ((*(__typeof__(&VSAVE->custom[0]))Port_SaveCustom(EZ_CELL)).set[ez->set])
 #define EZ_L (ez->list)
 #define EZ_T (ez->list.tab)
 
@@ -175,7 +180,7 @@ void EvoZ_Input(EvoZ *ez, s32 *result) {
             case 1:
                 EvoZ_ClipGoto(ez, 0, EVOZ_CLIP_MENU, 0, "fl_ok");
                 EvoZ_ClipGoto(ez, 0, EVOZ_CLIP_SET, 0, "fl_off_start");
-                PassWin_OpenEx(EZ_SET.id, ez->side->chara, VSAVE->custom[EZ_CELL].level);
+                PassWin_OpenEx(EZ_SET.id, ez->side->chara, (*(__typeof__(&VSAVE->custom[0]))Port_SaveCustom(EZ_CELL)).level);
                 ez->state = EVOZ_ST_PASSWORD;
                 Snd_PlaySe(1, 1);
                 break;
@@ -386,8 +391,8 @@ void EvoZ_Input(EvoZ *ez, s32 *result) {
     case EVOZ_ST_PAYING:
         if (gPad[0].gamePressed & 0x200) {
             VSAVE->money -= ez->zp;
-            VSAVE->custom[EZ_CELL].exp += ez->zp;
-            ez->exp = VSAVE->custom[EZ_CELL].exp;
+            (*(__typeof__(&VSAVE->custom[0]))Port_SaveCustom(EZ_CELL)).exp += ez->zp;
+            ez->exp = (*(__typeof__(&VSAVE->custom[0]))Port_SaveCustom(EZ_CELL)).exp;
             ez->flags ^= EVOZ_PAYING;
             ez->zp = 0;
             if (ez->exp >= ez->nextExp) {
@@ -397,7 +402,7 @@ void EvoZ_Input(EvoZ *ez, s32 *result) {
                 Flash_ClipGotoLabel(f, &ref, "fl_ability_limit_up_in");
                 ez->flags |= EVOZ_LIMIT_UP;
                 do {
-                    gSaveData->custom[EZ_CELL].level++;
+                    (*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(EZ_CELL)).level++;
                     ez->nextExp = ChrTbl_GetExp(ez->side->chara, EZ_CELL);
                 } while (ez->exp >= ez->nextExp && ez->nextExp != 0);
                 ez->state = EVOZ_ST_LEVEL_UP;
@@ -690,8 +695,8 @@ s32 EvoZ_GetLevelExp(EvoZ *ez, s32 chara, s32 cell) {
     VChrEntry *tbl = (VChrEntry *)MPACK_AT(gCommonRes->data[2], 1);
     s32 ret;
 
-    if (gSaveData->custom[cell].level != 0) {
-        ret = tbl[chara].exp[gSaveData->custom[cell].level - 1];
+    if ((*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(cell)).level != 0) {
+        ret = tbl[chara].exp[(*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(cell)).level - 1];
     } else {
         ret = 0;
     }
@@ -705,11 +710,11 @@ void EvoZ_RefreshStatus(EvoZ *ez) {
 
     ez->kind = (((VChrEntry *)MPACK_AT(gCommonRes->data[2], 1))[ez->side->chara].flags ^ 1) & 1;
     ez->capacity = ChrTbl_GetLevel(ez->side->chara, EZ_CELL, 0);
-    ez->fits = ItemSet_Fit(VSAVE->custom[EZ_CELL].set[ez->set].id, ez->items, ez->capacity, &ez->rowsUsed);
-    ez->exp = VSAVE->custom[EZ_CELL].exp;
+    ez->fits = ItemSet_Fit((*(__typeof__(&VSAVE->custom[0]))Port_SaveCustom(EZ_CELL)).set[ez->set].id, ez->items, ez->capacity, &ez->rowsUsed);
+    ez->exp = (*(__typeof__(&VSAVE->custom[0]))Port_SaveCustom(EZ_CELL)).exp;
     ez->nextExp = ChrTbl_GetExp(ez->side->chara, EZ_CELL);
     ez->expLeft = ChrTbl_GetMaxExp(ez->side->chara) - ez->exp;
-    ItemSet_GetBonus(VSAVE->custom[EZ_CELL].set[ez->set].id, ez->items, ez->bonus);
+    ItemSet_GetBonus((*(__typeof__(&VSAVE->custom[0]))Port_SaveCustom(EZ_CELL)).set[ez->set].id, ez->items, ez->bonus);
     base = EvoZ_GetLevelExp(ez, ez->side->chara, EZ_CELL);
     ez->expBar = (f32)(ez->exp - base) / (f32)(ez->nextExp - base) * 6.66f;
 }
@@ -747,7 +752,11 @@ void EvoZ_UpdateFace(EvoZ *ez) {
         break;
     case 1:
         File_CancelRequests();
+#ifdef PORT
+        File_Request(Port_CharaFileOr(ez->side->chara, 14, ez->side->chara + 0x2F9), ez->faceFile, 0x16800);
+#else
         File_Request(ez->side->chara + 0x2F9, ez->faceFile, 0x16800);
+#endif
         ez->faceState = 2;
         break;
     case 2:
@@ -793,7 +802,7 @@ s32 EvoZ_CanEquip(EvoZ *ez, s32 item) {
     if (!(u8)(VSAVE->item[item] & 1)) {
         return 0;
     }
-    ids = VSAVE->custom[EZ_CELL].set[ez->set].id;
+    ids = (*(__typeof__(&VSAVE->custom[0]))Port_SaveCustom(EZ_CELL)).set[ez->set].id;
     if (!ItemTbl_CanEquip(item, ez->side->chara, ez->items)) {
         ret = 0;
     } else {
@@ -824,12 +833,12 @@ s32 EvoZ_CanEquip(EvoZ *ez, s32 item) {
 void EvoZ_RemoveItem(EvoZ *ez) {
     s32 i;
 
-    VSAVE->custom[EZ_CELL].set[ez->set].id[ez->cur[3]] = 0;
+    (*(__typeof__(&VSAVE->custom[0]))Port_SaveCustom(EZ_CELL)).set[ez->set].id[ez->cur[3]] = 0;
     if (ez->cur[3] != 7) {
         for (i = ez->cur[3]; i < 6; i++) {
-            VSAVE->custom[EZ_CELL].set[ez->set].id[i] = VSAVE->custom[EZ_CELL].set[ez->set].id[i + 1];
+            (*(__typeof__(&VSAVE->custom[0]))Port_SaveCustom(EZ_CELL)).set[ez->set].id[i] = (*(__typeof__(&VSAVE->custom[0]))Port_SaveCustom(EZ_CELL)).set[ez->set].id[i + 1];
         }
-        VSAVE->custom[EZ_CELL].set[ez->set].id[6] = 0;
+        (*(__typeof__(&VSAVE->custom[0]))Port_SaveCustom(EZ_CELL)).set[ez->set].id[6] = 0;
     }
 }
 
@@ -838,6 +847,6 @@ void EvoZ_RemoveAllItems(EvoZ *ez) {
     s32 i;
 
     for (i = 0; i < 8; i++) {
-        VSAVE->custom[EZ_CELL].set[ez->set].id[i] = 0;
+        (*(__typeof__(&VSAVE->custom[0]))Port_SaveCustom(EZ_CELL)).set[ez->set].id[i] = 0;
     }
 }

@@ -699,6 +699,10 @@ static inline BtlTechAtkAction *BtlAtk_GetActionRow(s32 n) {
     return c
 
 /* The id of the attack record the fighter's current action / animation uses, -1 when it is not attacking. */
+#ifdef PORT
+extern s32 BtlAct_EndlessChain(BtlTechChr *chr);  /* Mod "Ultra Instinct" v83: the endless rush (btl_char_action.c) */
+#endif
+
 s32 BtlAtk_GetId(BtlTechChr *chr) {
     BtlTechObj *obj = BtlChar_GetObj(chr);
     f32 charge = chr->charge;
@@ -719,6 +723,26 @@ s32 BtlAtk_GetId(BtlTechChr *chr) {
     last = BtlObjAnim_QueryEvent(obj, 1, 0, 2);
     switch (action) {
         case 0x46:
+#ifdef PORT
+            /* Mod "Ultra Instinct" v83: the endless air rush (btl_act_a.c): every hit, 1-4 too, with the air rush's own hit
+               data, which keeps the opponent where it is (the ground rush's pushes it away: the next press is a
+               dash), and never the 4th hit's (0x51), which sets up the finish (a stagger the next hit misses) */
+            if (BtlAct_EndlessChain(chr)) {
+                switch (anim) {
+                    case 0x37:
+                    case 0x3C:
+                        return 0x4E;
+                    case 0x38:
+                    case 0x3A:
+                    case 0x3D:
+                        return 0x4F;
+                    case 0x39:
+                    case 0x3E:
+                    case 0x3F:
+                        return 0x50;
+                }
+            }
+#endif
             switch (anim) {
                 case 0x3C:
                     return 0x4E;

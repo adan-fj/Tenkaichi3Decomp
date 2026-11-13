@@ -16,6 +16,18 @@ def link(objs, extra):
         # Windows: the program at a fixed address below 4 GB (no relocation: the game's 4-byte pointers and the
         # 32-bit addresses in its data tables depend on it), the game's main() wrapped for a low stack (plat_mem.c),
         # the compiler's own libraries linked in, SDL3 as SDL3.dll next to the program.
+        # Mod "Ultra Instinct" v83: the program's icon, port/res/game.ico, as a resource object (no windres: no icon)
+        ico = ROOT / "port/res/game.ico"
+        if ico.exists():
+            rc = B / "icon.rc"
+            rc.write_text('1 ICON "%s"\n' % ico.as_posix())
+            res = B / "icon_res.o"
+            try:
+                made = subprocess.run([PREFIX + "windres", "-O", "coff", "-i", str(rc), "-o", str(res)]).returncode == 0
+            except OSError:
+                made = False
+            if made:
+                extra = extra + [str(res)]
         lib = [f"-L{sdl3() / 'lib'}"] if sdl3() else []
         cmd = [PREFIX + "gcc", "-w", "-o", str(EXE)] + extra + objs + lib + \
               ["-lSDL3", "-lm", "-lwinmm", "-lws2_32", "-lwinhttp", "-static-libgcc", "-Wl,-Bstatic", "-lstdc++", "-lwinpthread", "-Wl,-Bdynamic",

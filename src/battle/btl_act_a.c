@@ -319,6 +319,10 @@ void BtlAct_RequestAttackEnd(BtlActAChr *chr, BtlActAAttack *atk) {
     BtlAct_Request(chr, id);
 }
 
+#ifdef PORT
+extern s32 BtlAct_EndlessChain(BtlActAChr *chr);  /* Mod "Ultra Instinct" v83: the endless rush (btl_char_action.c) */
+#endif
+
 /* Action 0x44: rush combo step. */
 s32 BtlAct_RushHandler(BtlActAChr *chr, s32 phase) {
     f32 *cancelAt = &chr->workF[0];
@@ -342,6 +346,16 @@ s32 BtlAct_RushHandler(BtlActAChr *chr, s32 phase) {
             }
             BtlChar_ClearFlag(chr, 0x86);
         }
+#ifdef PORT
+        if (BtlAct_EndlessChain(chr)) {  /* Mod "Ultra Instinct" v83: no finishing hit: the 4th goes on to the 6th, the 9th to the 1st */
+            if (chr->unkD60 == 4) {
+                chr->unkD60 = 5;
+            }
+            if (chr->unkD60 == 9) {
+                chr->unkD60 = 0;
+            }
+        }
+#endif
         anim = chr->unkD60 + 0x37;
         chr->unkD60++;
         chr->unkD60 %= 10;
@@ -500,9 +514,24 @@ s32 BtlAct_RushRapidHandler(BtlActAChr *chr, s32 phase) {
             BtlCharSnd_PlayCommon(chr, BtlParam_GetDashSound(chr));
             BtlChar_PlayVoice(chr, 7);
         }
+#ifdef PORT
+        if (BtlAct_EndlessChain(chr)) {  /* Mod "Ultra Instinct" v83: the air rush (after up + triangle) goes round all eight
+                                           rush hits, 6-9 (the air opener, it reaches from the dash) then 1-4 */
+            static const s32 hits[8] = { 0x3C, 0x3D, 0x3E, 0x3F, 0x37, 0x38, 0x39, 0x3A };
+
+            chr->unkD64 &= 7;
+            BtlAnim_Play(chr, hits[chr->unkD64], 0.1f);
+            chr->unkD64++;
+        } else {
+            chr->unkD64 = BtlUtil_Clamp(chr->unkD64, 0, 4);
+            BtlAnim_Play(chr, chr->unkD64 + 0x3C, 0.1f);
+            chr->unkD64++;
+        }
+#else
         chr->unkD64 = BtlUtil_Clamp(chr->unkD64, 0, 4);
         BtlAnim_Play(chr, chr->unkD64 + 0x3C, 0.1f);
         chr->unkD64++;
+#endif
         BtlMove_BeginRiseToOpponent(chr);
         BtlChar_SetHeldFlag(chr, 0xE);
         pose = BtlChar_GetPos(chr);
@@ -514,6 +543,16 @@ s32 BtlAct_RushRapidHandler(BtlActAChr *chr, s32 phase) {
     if (phase == 1) {
         next = BtlChar_TestFlag(chr, 0xE) ? 0x26 : 0;
         switch (BtlAnim_GetId(chr)) {
+#ifdef PORT
+            case 0x37:  /* Mod "Ultra Instinct" v83: hits 1-4 in the endless air rush, at the ground rush's speed (at
+                           the triple step their short hit frames are skipped: no hit, the chain stops) */
+            case 0x38:
+            case 0x39:
+            case 0x3A:
+                BtlAnim_AdvanceThen(chr, next, 0.3f, 0);
+                BtlChar_SetFxBit(chr, 9);
+                break;
+#endif
             case 0x3C:
             case 0x3D:
             case 0x3E:
@@ -553,6 +592,12 @@ s32 BtlAct_RushRapidHandler(BtlActAChr *chr, s32 phase) {
         can = 0;
         go = 0;
         switch (BtlAnim_GetId(chr)) {
+#ifdef PORT
+            case 0x37:  /* Mod "Ultra Instinct" v83: hits 1-4 in the endless air rush */
+            case 0x38:
+            case 0x39:
+            case 0x3A:
+#endif
             case 0x3C:
             case 0x3D:
             case 0x3E:
@@ -1695,11 +1740,40 @@ s32 BtlAct_RushFinishHandler(BtlActAChr *chr, s32 phase) {
                 turn = speed;
                 break;
         }
+#ifdef PORT
+        {
+            extern f32 BtlAct_DashStrikeChaseSpeed(void *chr);
+            f32 chase = BtlAct_DashStrikeChaseSpeed((void *)chr);  /* Mod "Ultra Instinct" v83: a dash strike */
+
+            extern f32 BtlAct_DashStrikeAim(void *chr, f32 *yaw, f32 *pitch);
+            f32 aimYaw;
+            f32 aimPitch;
+            f32 left = BtlAct_DashStrikeAim((void *)chr, &aimYaw, &aimPitch);
+
+            if (chase != 0.0f && left >= 0.0f) {
+                /* it flies on at the dash's speed while it winds up and charges, straight at the opponent (the stick picks the strike, it does not steer), and slows down to stop in front of it */
+                speed = chase > 0.0f ? BTL_KMH(chase) : BtlMoveParam_GetSpeed(chr, 6);
+                if (speed > left) {
+                    speed = left;
+                }
+                BtlMove_SetHeading(chr, aimYaw, aimPitch);
+                BtlMove_SetDirection(chr, 3);
+                BtlMove_Advance(chr, speed, 10000.0f);
+            } else {
+                BtlMove_TurnYaw(chr, mode, turn);
+                BtlMove_TurnPitch(chr, 5, 3.14159265f);
+                BtlMove_TurnModelYaw(chr, BTL_DEG(36.0f), 0.3f);
+                BtlMove_SetDirection(chr, 2);
+                BtlMove_Advance(chr, speed, BTL_KMH(100.0f));
+            }
+        }
+#else
         BtlMove_TurnYaw(chr, mode, turn);
         BtlMove_TurnPitch(chr, 5, 3.14159265f);
         BtlMove_TurnModelYaw(chr, BTL_DEG(36.0f), 0.3f);
         BtlMove_SetDirection(chr, 2);
         BtlMove_Advance(chr, speed, BTL_KMH(100.0f));
+#endif
         BtlMove_ApplyGravity(chr);
         BtlChar_SetFlag(chr, 0xD5);
         if (BtlChar_TestFlag(chr, 0x11)) {

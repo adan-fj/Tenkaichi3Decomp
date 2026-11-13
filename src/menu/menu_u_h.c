@@ -8,6 +8,12 @@
  */
 
 /* Clip callback: limits drawing to the list window. */
+#ifdef PORT
+extern void *Port_SaveCustom(s32 cell);  /* Mod "Ultra Instinct" v83 */
+extern void *CharSel_ExtendText(void *text, s32 which);  /* the versus select's (menu_c_e.c) */
+extern u32 *CharSel_ExtendChips(u32 *pack);
+#endif
+
 void EvoZ_SetListScissor(void) {
     Sprite_SetScissor(0, 0x200, 0xC6, 0x19C);
 }
@@ -208,7 +214,7 @@ void EvoZ_Refresh(UEvoZ *ez) {
             Flash_ClipSetFlags(flash, &ref, 2, 0);
             Flash_FindLabel(flash, name, "mc_list_plate_off", &ref);
             if (i < ez->used || i == 7) {
-                if (gSaveData->custom[ez->side->pick.col + ez->side->pick.row * 7].set[ez->set][i] != 0) {
+                if ((*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(ez->side->pick.col + ez->side->pick.row * 7)).set[ez->set][i] != 0) {
                     Flash_ClipSetTex(flash, &ref, 4);
                 } else {
                     Flash_ClipSetTex(flash, &ref, 5);
@@ -217,7 +223,7 @@ void EvoZ_Refresh(UEvoZ *ez) {
                 Flash_ClipSetTex(flash, &ref, 7);
             }
             Flash_FindLabel(flash, name, "mc_list_plate_on", &ref);
-            if (gSaveData->custom[ez->side->pick.col + ez->side->pick.row * 7].set[ez->set][i] != 0) {
+            if ((*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(ez->side->pick.col + ez->side->pick.row * 7)).set[ez->set][i] != 0) {
                 Flash_ClipSetTex(flash, &ref, 0);
             } else {
                 Flash_ClipSetTex(flash, &ref, 1);
@@ -234,9 +240,9 @@ void EvoZ_Refresh(UEvoZ *ez) {
                 Flash_ClipSetFlags(flash, &ref, 2, 0);
             }
             Flash_FindLabel(flash, name, "mc_icon_item_cost", &ref);
-            if (gSaveData->custom[ez->side->pick.col + ez->side->pick.row * 7].set[ez->set][i] != 0 && ez->items[gSaveData->custom[ez->side->pick.col + ez->side->pick.row * 7].set[ez->set][i] - 1].slots != 0) {
-                uv.x0 = ez->items[gSaveData->custom[ez->side->pick.col + ez->side->pick.row * 7].set[ez->set][i] - 1].slots * 32 - 32;
-                uv.y0 = ItemTbl_GetClass(gSaveData->custom[ez->side->pick.col + ez->side->pick.row * 7].set[ez->set][i] - 1, ez->items) * 42;
+            if ((*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(ez->side->pick.col + ez->side->pick.row * 7)).set[ez->set][i] != 0 && ez->items[(*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(ez->side->pick.col + ez->side->pick.row * 7)).set[ez->set][i] - 1].slots != 0) {
+                uv.x0 = ez->items[(*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(ez->side->pick.col + ez->side->pick.row * 7)).set[ez->set][i] - 1].slots * 32 - 32;
+                uv.y0 = ItemTbl_GetClass((*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(ez->side->pick.col + ez->side->pick.row * 7)).set[ez->set][i] - 1, ez->items) * 42;
                 uv.x1 = uv.x0 + 32;
                 uv.y1 = uv.y0 + 42;
                 Flash_ClipSetFlags(flash, &ref, 2, 1);
@@ -245,8 +251,8 @@ void EvoZ_Refresh(UEvoZ *ez) {
                 Flash_ClipSetFlags(flash, &ref, 2, 0);
             }
             Flash_FindLabel(flash, name, "mc_icon_item_potara", &ref);
-            if (gSaveData->custom[ez->side->pick.col + ez->side->pick.row * 7].set[ez->set][i] != 0) {
-                uv.x0 = ez->items[gSaveData->custom[ez->side->pick.col + ez->side->pick.row * 7].set[ez->set][i] - 1].type * 64;
+            if ((*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(ez->side->pick.col + ez->side->pick.row * 7)).set[ez->set][i] != 0) {
+                uv.x0 = ez->items[(*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(ez->side->pick.col + ez->side->pick.row * 7)).set[ez->set][i] - 1].type * 64;
                 uv.y0 = 0;
                 uv.x1 = uv.x0 + 64;
                 uv.y1 = 0x40;
@@ -256,8 +262,8 @@ void EvoZ_Refresh(UEvoZ *ez) {
                 Flash_ClipSetFlags(flash, &ref, 2, 0);
             }
             Flash_FindLabel(flash, name, "mc_dammy_text", &ref);
-            if (gSaveData->custom[ez->side->pick.col + ez->side->pick.row * 7].set[ez->set][i] != 0) {
-                TextBox_AttachLine(flash, &ref, 0, 0, gSaveData->custom[ez->side->pick.col + ez->side->pick.row * 7].set[ez->set][i] - 1, &ez->box[10 + i]);
+            if ((*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(ez->side->pick.col + ez->side->pick.row * 7)).set[ez->set][i] != 0) {
+                TextBox_AttachLine(flash, &ref, 0, 0, (*(__typeof__(&gSaveData->custom[0]))Port_SaveCustom(ez->side->pick.col + ez->side->pick.row * 7)).set[ez->set][i] - 1, &ez->box[10 + i]);
             } else {
                 TextBox_AttachLine(flash, &ref, 0, 0, -1, &ez->box[10 + i]);
             }
@@ -662,11 +668,21 @@ void EvoZ_Load(UEvoZ *ez, s32 section) {
     Dialog_SetLayout(0);
 
     ez->items = (UItemEntry *)MPACK_AT(gCommonRes->data[2], 2);
+#ifdef PORT
+    ez->text[0] = CharSel_ExtendText(MPACK_AT(ez->res, 34), 0);  /* Mod "Ultra Instinct" v83: + the added fighters */
+    ez->text[1] = CharSel_ExtendText(MPACK_AT(ez->res, 35), 1);
+#else
     ez->text[0] = MPACK_AT(ez->res, 34);
     ez->text[1] = MPACK_AT(ez->res, 35);
+#endif
     ez->text[2] = MPACK_AT(ez->res, 37);
+#ifdef PORT
+    ez->chipPack = CharSel_ExtendChips((u32 *)MPACK_AT(ez->res, 36));  /* Mod "Ultra Instinct" v83: + the added fighters */
+    for (i = 0; i < (s32)ez->chipPack[0]; i++) {
+#else
     ez->chipPack = (u32 *)MPACK_AT(ez->res, 36);
     for (i = 0; i < 165; i++) {
+#endif
         res = (MTexRes *)MPACK_AT(ez->chipPack, i + 1);
         Res_RelocateOffsets(&res, res, res);
     }

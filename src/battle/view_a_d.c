@@ -84,8 +84,16 @@ ChrView *gChrView = NULL;
 
 #define BTL_OBJ_FLAGS(obj) (*(u32 *)((obj) + 0xA40))
 
+extern s32 Port_CharaFileOr(s32 chara, s32 k, s32 id);
+extern s32 Port_CharaOfFile(s32 id);
+extern s32 Port_CharaVoice(s32 chara);
+extern s32 Port_ModFighterBase(s32 chara);
+extern s32 Port_ModFighterTop(void);
 /* File id of a character's model: costume n, or its damaged version. */
 s32 ChrView_GetModelFile(s32 chara, s32 costume, s32 damaged) {
+    if (chara >= 0xA5) {  /* Mod "Ultra Instinct" v83: an added fighter */
+        return Port_CharaFileOr(chara, costume + (damaged != 0 ? 4 : 0), chara * 10 + costume + CHRVIEW_FILE_FIRST);
+    }
     if (damaged != 0) {
         return chara * 10 + costume + (CHRVIEW_FILE_FIRST + 4);
     }
@@ -95,7 +103,7 @@ s32 ChrView_GetModelFile(s32 chara, s32 costume, s32 damaged) {
 /* The character's entry in the table of common file 4, NULL for an id that is not a character. */
 ChrViewInfo *ChrView_GetCharaInfo(u32 chara) {
     ChrViewInfo *table = PACK_AT(gCommonRes->data[2], 1);
-    if (chara >= CHRVIEW_CHARA_COUNT) {
+    if (chara >= CHRVIEW_CHARA_COUNT && Port_ModFighterBase((s32)chara) < 0) {  /* Mod "Ultra Instinct" v83 */
         return NULL;
     }
     return &table[chara];

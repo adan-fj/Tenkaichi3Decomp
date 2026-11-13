@@ -928,6 +928,18 @@ void EftCharge_PostUpdate(EftRTask *task) {
 void EftCharge_Draw(void) {
 }
 
+#ifdef PORT
+extern void BtlGod_RecolorCharge(s32 side, s32 *pack);  /* Mod "Ultra Instinct" v83 (btl_char_mgr.c) */
+#endif
+#ifdef PORT
+/* Mod "Ultra Instinct" v83: the charge sets beside each fighter's own: 0 Goku Ultra Instinct's, 1..6 the god forms' (btl_char_mgr.c) */
+extern s32 *BtlGod_ChargeAltPack(s32 side, s32 k);
+extern s32 BtlGod_ChargePick(s32 side);
+#define EFT_CHARGE_ALTS 7
+static EftRMgr *sEftChargeMgr[2];
+static EftRSetPack *sEftChargeOwn[2];
+static EftRSetPack *sEftChargeAlt[2][EFT_CHARGE_ALTS];
+#endif
 /* Manager init: loads the set from entry 2 of the character's effect pack, makes room for four tasks. */
 void EftChargeMgr_Init(EftRTask *task, s32 *arg) {
     EftRMgr *mgr = task->work;
@@ -940,9 +952,33 @@ void EftChargeMgr_Init(EftRTask *task, s32 *arg) {
     set = mgr->set;
     pack = BtlScene_GetCharPackEntry(arg[0], 2);
     set->pack = pack;
+#ifdef PORT
+    BtlGod_RecolorCharge(arg[0], pack);  /* a god form's charge particles */
+#endif
     if (pack != NULL) {
         EftEmit_LoadSet(NULL, set, 0, pack, 2, 1);
     }
+#ifdef PORT
+    if (arg[0] == 0 || arg[0] == 1) {
+        s32 k;
+
+        sEftChargeMgr[arg[0]] = mgr;
+        sEftChargeOwn[arg[0]] = mgr->set;
+        for (k = 0; k < EFT_CHARGE_ALTS; k++) {
+            s32 *alt = BtlGod_ChargeAltPack(arg[0], k);
+
+            sEftChargeAlt[arg[0]][k] = NULL;
+            if (alt != NULL) {
+                EftRSetPack *u = BtlPool_Alloc(BtlPool_GetCurrent(), sizeof(EftRSetPack));
+
+                memset(u, 0, sizeof(EftRSetPack));
+                u->pack = alt;
+                EftEmit_LoadSet(NULL, u, 0, alt, 2, 1);
+                sEftChargeAlt[arg[0]][k] = u;
+            }
+        }
+    }
+#endif
     list = BtlTask_CreateChildList(task, 4, sizeof(EftCharge));
     EftChar_SetList(arg[0], arg[1], list);
 }
@@ -951,6 +987,28 @@ void EftChargeMgr_Init(EftRTask *task, s32 *arg) {
 void EftChargeMgr_Term(EftRTask *task) {
     EftRMgr *mgr = task->work;
 
+#ifdef PORT
+    {
+        s32 s;
+        s32 k;
+
+        for (s = 0; s < 2; s++) {
+            if (sEftChargeMgr[s] != mgr) {
+                continue;
+            }
+            mgr->set = sEftChargeOwn[s];  /* its own set goes below */
+            for (k = EFT_CHARGE_ALTS - 1; k >= 0; k--) {
+                if (sEftChargeAlt[s][k] != NULL) {
+                    EftEmit_FreeSet(sEftChargeAlt[s][k]);
+                    BtlPool_Free(BtlPool_GetCurrent(), sEftChargeAlt[s][k]);
+                    sEftChargeAlt[s][k] = NULL;
+                }
+            }
+            sEftChargeMgr[s] = NULL;
+            sEftChargeOwn[s] = NULL;
+        }
+    }
+#endif
     if (mgr->set->pack != NULL) {
         EftEmit_FreeSet(mgr->set);
     }
@@ -963,6 +1021,27 @@ void EftChargeMgr_Term(EftRTask *task) {
 void EftChargeMgr_Update(EftRTask *task) {
     EftRMgr *mgr = task->work;
 
+#ifdef PORT
+    {
+        s32 s;
+        s32 k;
+
+        for (s = 0; s < 2; s++) {
+            if (sEftChargeMgr[s] != mgr) {
+                continue;
+            }
+            /* the sets not in use step too (their charges may still run) */
+            if (mgr->set != sEftChargeOwn[s] && sEftChargeOwn[s] != NULL && sEftChargeOwn[s]->pack != NULL) {
+                EftEmit_BeginFrame(sEftChargeOwn[s]);
+            }
+            for (k = 0; k < EFT_CHARGE_ALTS; k++) {
+                if (sEftChargeAlt[s][k] != NULL && mgr->set != sEftChargeAlt[s][k]) {
+                    EftEmit_BeginFrame(sEftChargeAlt[s][k]);
+                }
+            }
+        }
+    }
+#endif
     if (mgr->set->pack != NULL) {
         EftEmit_BeginFrame(mgr->set);
     }
@@ -981,6 +1060,14 @@ s32 EftCharge_Start(s32 *arg) {
     if (list == NULL) {
         return 0;
     }
+#ifdef PORT
+    if ((objId == 0 || objId == 1) && sEftChargeMgr[objId] != NULL) {
+        s32 k = BtlGod_ChargePick(objId);
+
+        sEftChargeMgr[objId]->set = k >= 0 && k < EFT_CHARGE_ALTS && sEftChargeAlt[objId][k] != NULL ?
+                                    sEftChargeAlt[objId][k] : sEftChargeOwn[objId];
+    }
+#endif
     task = BtlTaskList_AddTail(list, &gEftChargeClass, &objId);
     if (task == NULL) {
         return 0;
