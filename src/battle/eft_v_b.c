@@ -276,10 +276,17 @@ void EftImpactMgr_Update(EftVTask *task) {
 void EftImpactMgr_Reset(EftVTask *task) {
 }
 
+#ifdef PORT
+extern void BtlGod_SparkColors(s32 objId, s32 kind);  /* Mod "Ultra Instinct" v101: the charge colour (btl_char_mgr.c) */
+#endif
+
 /* Starts a hit spark (group 0) sized by the fighter's scale. Returns 0 when the list is full. */
 s32 EftImpact_SpawnHit(EftImpactArg *arg) {
     EftImpactInit init;
 
+#ifdef PORT
+    BtlGod_SparkColors(arg->objId, arg->id);
+#endif
     init.arg = *arg;
     init.group = 0;
     init.scale = 0.0f;
@@ -291,6 +298,9 @@ s32 EftImpact_SpawnHit(EftImpactArg *arg) {
 s32 EftImpact_SpawnHitScaled(EftImpactArg *arg, f32 scale) {
     EftImpactInit init;
 
+#ifdef PORT
+    BtlGod_SparkColors(arg->objId, arg->id);
+#endif
     init.scale = scale;
     init.arg = *arg;
     init.group = 0;

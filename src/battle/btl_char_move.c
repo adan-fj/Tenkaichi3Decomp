@@ -797,6 +797,13 @@ void BtlMove_Step(BtlMoveChr *chr, s32 yawMode, s32 pitchMode, s32 dirMode, f32 
 }
 
 /* Lock-on only: places the fighter on the opponent's path, `lead` frames ahead plus both radii, inside the stage radius. */
+#ifdef PORT
+/* Mod "Ultra Instinct" v101: the strike after the warp runs at the fighter's attack speed (btl_char_status_anim.c): it hits
+   after lead / speed frames, so the opponent is looked for there (vanish_lead_follows_speed 0: the game's lead) */
+extern f32 BtlAnim_AttackRate(BtlMoveChr *chr);
+extern f32 Port_ModValue(const char *key, f32 def);
+#endif
+
 void BtlMove_WarpAheadOfOpponent(BtlMoveChr *chr, f32 lead) {
     Vec4 opp;
     Vec4 oppVel;
@@ -805,6 +812,15 @@ void BtlMove_WarpAheadOfOpponent(BtlMoveChr *chr, f32 lead) {
     Vec4 rot;
     BtlMovePose *pose = BtlChar_GetPos(chr);
 
+#ifdef PORT
+    if (Port_ModValue("vanish_lead_follows_speed", 1.0f) != 0.0f) {
+        f32 rate = BtlAnim_AttackRate(chr);
+
+        if (rate > 1.0f) {
+            lead /= rate;
+        }
+    }
+#endif
     if (BtlChar_TestFlag(chr, 5)) {
         f32 min;
         f32 rad;
