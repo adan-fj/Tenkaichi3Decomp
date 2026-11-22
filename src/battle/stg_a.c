@@ -253,6 +253,20 @@ s32 BtlStage_FindZone(Vec4 *pos) {
     return -1;
 }
 
+#ifdef PORT
+extern f32 Port_ModValue(const char *key, f32 def);
+
+/* Mod "Ultra Instinct" v115: every stage's limit (the invisible wall around it) stage_size_scale times as wide (1 = the game's). */
+static f32 BtlStage_SizeScale(void) {
+    f32 k = Port_ModValue("stage_size_scale", 4.0f);
+
+    return k > 0.0f ? k : 1.0f;
+}
+#define STG_RADIUS(b) ((b)->radius * BtlStage_SizeScale())
+#else
+#define STG_RADIUS(b) ((b)->radius)
+#endif
+
 /* The stage's horizontal radius; the last value read while the stage is not ready. */
 f32 BtlStage_GetRadius(void) {
     StgBounds *b;
@@ -261,8 +275,8 @@ f32 BtlStage_GetRadius(void) {
         return gStgLastRadius;
     }
     b = gBtlStage->bounds;
-    gStgLastRadius = b->radius;
-    return b->radius;
+    gStgLastRadius = STG_RADIUS(b);
+    return gStgLastRadius;
 }
 
 /* The radius fighters are kept inside: the stage radius - 100 (not subtracted while the stage is not ready). */
@@ -273,8 +287,8 @@ f32 BtlStage_GetInnerRadius(void) {
         return gStgLastRadius;
     }
     b = gBtlStage->bounds;
-    gStgLastRadius = b->radius;
-    return b->radius - 100.0f;
+    gStgLastRadius = STG_RADIUS(b);
+    return gStgLastRadius - 100.0f;
 }
 
 /* The stage's top limit (smallest y). */
@@ -285,8 +299,16 @@ f32 BtlStage_GetTop(void) {
         return gStgLastTop;
     }
     b = gBtlStage->bounds;
+#ifdef PORT
+    {
+        f32 k = Port_ModValue("stage_height_scale", 4.0f);  /* Mod "Ultra Instinct" v115: taller stages */
+
+        gStgLastTop = k > 0.0f && b->bottom > b->top ? b->bottom - (b->bottom - b->top) * k : b->top;
+    }
+#else
     gStgLastTop = b->top;
-    return b->top;
+#endif
+    return gStgLastTop;
 }
 
 /* The stage's bottom limit (largest y). */
@@ -300,6 +322,19 @@ f32 BtlStage_GetBottom(void) {
     gStgLastBottom = b->bottom;
     return b->bottom;
 }
+
+#ifdef PORT
+/* Mod "Ultra Instinct" v115: the limit that holds a fighter up from below: the stage's bottom with stage_bottom_barrier 1,
+   else stage_bottom_depth further down (a floor deep below, so that nobody falls for ever). */
+f32 BtlStage_GetHoldBottom(void) {
+    f32 b = BtlStage_GetBottom();
+
+    if (Port_ModValue("stage_bottom_barrier", 0.0f) != 0.0f) {
+        return b;
+    }
+    return b + Port_ModValue("stage_bottom_depth", 5000.0f);
+}
+#endif
 
 /* Zone containing pos, trying the given zone and its neighbours first; 0 when no zone contains it. */
 s32 BtlStage_FindZoneNear(s32 zone, Vec4 *pos) {

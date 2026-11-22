@@ -1751,10 +1751,601 @@ void BtlSkill_SetFlag(BtlActIChr *chr, s32 cls) {
     BtlChar_SetFlag(chr, flag);
 }
 
+#ifdef PORT
+/* Mod "Ultra Instinct" v115: Kaioken. Goku (Early)'s own Kaioken (skill 0x18, L2 + up + circle) and L2 + down + circle for every
+   adult Goku (btl_act_j.c) both come here. Each activation stacks one more level: x2, x3, x4, x10, x20, x50, x100,
+   x200, x500, x1000. It costs 5 stamina and a share of the maximum health (5% up to x4, 10% for x10 / x20, 15% for
+   x50 / x100, 20% above; it cannot kill), raises the power level by the multiplier (btl_char_member.c), the speed of
+   movement and attacks (btl_tech_b.c, btl_char_status_anim.c). Its strength works only through the power level,
+   compressed like a transformation (the square root of the multiplier, within the overall limit), not through the
+   game's flat stat levels. It neither gives nor drains ki, charging is allowed (with the red aura of Kaioken) and it lasts until
+   the fighter changes form or member (BtlAct_EndFlag98). The level is kept in skillKiRate (the game's ki drain rate
+   of Kaioken, unused now); bit 0x100 there marks a Kaioken queued from L2 + down + circle. */
+#define BTL_KAIOKEN_MAX 10
+#define BTL_KAIOKEN_STAMINA ((s32)Port_ModValue("kaioken_stamina", 5.0f))
+#define BTL_ESCAPE_STAMINA ((s32)Port_ModValue("escape_stamina", 10.0f))
+extern f32 Port_ModValue(const char *key, f32 def);
+static const char *const sKaiokenMultKey[BTL_KAIOKEN_MAX + 1] = {
+    "", "kaioken_multiplier_1", "kaioken_multiplier_2", "kaioken_multiplier_3", "kaioken_multiplier_4",
+    "kaioken_multiplier_5", "kaioken_multiplier_6", "kaioken_multiplier_7", "kaioken_multiplier_8",
+    "kaioken_multiplier_9", "kaioken_multiplier_10"
+};
+static const char *const sKaiokenSpeedKey[BTL_KAIOKEN_MAX + 1] = {
+    "", "kaioken_speed_1", "kaioken_speed_2", "kaioken_speed_3", "kaioken_speed_4", "kaioken_speed_5",
+    "kaioken_speed_6", "kaioken_speed_7", "kaioken_speed_8", "kaioken_speed_9", "kaioken_speed_10"
+};
+static const char *const sKaiokenHealthKey[BTL_KAIOKEN_MAX + 1] = {
+    "", "kaioken_health_1", "kaioken_health_2", "kaioken_health_3", "kaioken_health_4", "kaioken_health_5",
+    "kaioken_health_6", "kaioken_health_7", "kaioken_health_8", "kaioken_health_9", "kaioken_health_10"
+};
+static const f32 sKaiokenMult[BTL_KAIOKEN_MAX + 1] = { 1, 2, 3, 4, 10, 20, 50, 100, 200, 500, 1000 };
+static const f32 sKaiokenSpeed[BTL_KAIOKEN_MAX + 1] = {
+    1.0f, 1.15f, 1.24f, 1.3f, 1.5f, 1.65f, 1.85f, 2.0f, 2.15f, 2.35f, 2.5f
+};
+static const s32 sKaiokenHealth[BTL_KAIOKEN_MAX + 1] = {  /* health points (10000 = one bar) */
+    0, 2500, 2500, 2500, 5000, 5000, 7500, 7500, 10000, 10000, 10000
+};
+extern s32 BtlMember_PayStamina(BtlActIChr *chr, s32 points);
+extern s32 BtlMember_HasStamina(BtlActIChr *chr, s32 points);
+extern s32 BtlMember_GetActiveChara(BtlActIChr *chr);
+
+s32 BtlAct_KaiokenLevel(BtlActIChr *chr) {
+    s32 level;
+
+    if (!BtlChar_TestFlag(chr, 0x98)) {
+        return 0;
+    }
+    level = chr->skillKiRate & 0xFF;
+    return level > BTL_KAIOKEN_MAX ? BTL_KAIOKEN_MAX : level;
+}
+
+f32 BtlAct_KaiokenMult(BtlActIChr *chr) {
+    s32 level = BtlAct_KaiokenLevel(chr);
+
+    return level > 0 ? Port_ModValue(sKaiokenMultKey[level], sKaiokenMult[level]) : 1.0f;
+}
+
+f32 BtlAct_KaiokenSpeed(BtlActIChr *chr) {
+    s32 level = BtlAct_KaiokenLevel(chr);
+
+    return level > 0 ? Port_ModValue(sKaiokenSpeedKey[level], sKaiokenSpeed[level]) : 1.0f;
+}
+
+/* Goku (Early) .. Goku (GT) Super Saiyan 4: the adult Gokus and their forms. */
+s32 BtlAct_IsGoku(BtlActIChr *chr) {
+    s32 c = BtlMember_GetActiveChara(chr);
+
+    return c >= 0x00 && c <= 0x0A;
+}
+
+void BtlAct_KaiokenQueue(BtlActIChr *chr) {
+    chr->skillKiRate |= 0x900;
+}
+
+void BtlAct_KaiokenUnqueue(BtlActIChr *chr) {
+    chr->skillKiRate &= ~0x900;
+}
+
+/* Mod "Ultra Instinct" v115: Ultra Instinct (bit 0x200) and Super Speed (0x400) are modes switched on and off with L2 + right / left +
+   circle by the characters abilities.csv gives them (btl_act_j.c); BtlMember_HasAbility answers 0x7E / 0x7D from
+   them. They end with a new form or member (BtlAct_EndFlag98). Bit 0x800 marks a Kaioken started from L2 + down +
+   circle while its skill action runs: the aura's charge look (below) and the banner. */
+extern s32 Port_ModAbility(s32 chara, s32 which);
+extern void HudCombo_ShowModeText(s32 side, s32 kind, s32 value);
+extern s32 BtlMember_UltraInstinctStamina(void *chr, s32 activate);
+
+s32 BtlAct_ModeOn(BtlActIChr *chr, s32 bit) {
+    return (chr->skillKiRate & bit) != 0;
+}
+
+/* 0 Kaioken, 1 Ultra Instinct, 2 Super Speed (abilities.csv). */
+s32 BtlAct_HasModeAbility(BtlActIChr *chr, s32 which) {
+    return Port_ModAbility(BtlMember_GetActiveChara(chr), which);
+}
+
+void BtlAct_ToggleMode(BtlActIChr *chr, s32 bit) {
+    s32 ui = bit == 0x200;
+
+    if (chr->skillKiRate & bit) {
+        chr->skillKiRate &= ~bit;
+        HudCombo_ShowModeText(chr->player, ui ? 3 : 5, 0);
+        return;
+    }
+    if (!BtlMember_PayStamina(chr, ui ? BtlMember_UltraInstinctStamina(chr, 1)
+                                      : (s32)Port_ModValue("super_speed_activate_stamina", 10.0f))) {
+        return;
+    }
+    chr->skillKiRate |= bit;
+    BtlCharSnd_PlayCommon((void *)chr, 0x14);
+    HudCombo_ShowModeText(chr->player, ui ? 2 : 4, 0);
+}
+
+/* Mod "Ultra Instinct" v115: the Ultra Instinct potara (capsule ability 0x7C, capsules.csv): Ultra Instinct switches on by itself, for
+   no stamina, while the member's health is ultra_instinct_potara_health or less (5000: half the last bar). It ends
+   as the mode always does (a new form or member) and comes back while the health stays that low. Every frame
+   (BtlAct_UpdateTimers). */
+extern s32 BtlMember_HasAbility(BtlActIChr *chr, s32 n);
+
+void BtlAct_UltraInstinctPotara(BtlActIChr *chr) {
+    s32 health;
+
+    if ((chr->skillKiRate & 0x200) || !BtlMember_HasAbility(chr, 0x7C)) {
+        return;
+    }
+    health = BtlMember_GetActiveGauge(chr)->health;
+    if (health <= 0 || health > (s32)Port_ModValue("ultra_instinct_potara_health", 5000.0f)) {
+        return;
+    }
+    chr->skillKiRate |= 0x200;
+    BtlCharSnd_PlayCommon((void *)chr, 0x14);
+    HudCombo_ShowModeText(chr->player, 2, 0);
+}
+
+/* Mod "Ultra Instinct" v115: Goku's Ultra Instinct forms. In a character of ultra_instinct_sign_form / ultra_instinct_mastered_form (ids;
+   -1 none) Ultra Instinct is on by itself, its dodges cost nothing (BtlMember_UltraInstinctStamina) and the form's
+   stamina drain (power_levels.csv) is its limit. In the mastered form its effects follow the fighter's calm, 0..1:
+   full when it enters the form; each hit taken takes ui_mastered_calm_per_hit_taken, each hit it lands gives
+   ui_mastered_calm_per_hit_dealt, ui_mastered_calm_recover a second comes back while it is not being hit (times
+   ui_mastered_anxious_recover below ui_mastered_anxious_health of its health). Below ui_mastered_calm_off the Ultra
+   Instinct effects leave it (the "off" banner) until the calm is over ui_mastered_calm_on again (the banner, the
+   sound); its power level goes from ui_mastered_anxious_power times (no calm) to the whole (BtlAct_UltraInstinctCalmPower). */
+static f32 sUiCalm[2];
+static s32 sUiTaken[2];
+static s32 sUiDealt[2];
+static s32 sUiAuto[2];
+static s32 sUiOn[2];
+static s32 sUiChara[2] = { -1, -1 };
+
+/* 1 Sign, 2 Mastered, 0 neither. */
+s32 BtlAct_UltraInstinctFormOf(s32 chara) {
+    if (chara >= 0 && chara == (s32)Port_ModValue("ultra_instinct_sign_form", 165.0f)) {
+        return 1;
+    }
+    if (chara >= 0 && chara == (s32)Port_ModValue("ultra_instinct_mastered_form", 170.0f)) {
+        return 2;
+    }
+    return 0;
+}
+
+/* The mastered form's power multiplier from its calm; 1 elsewhere (btl_char_member.c). */
+f32 BtlAct_UltraInstinctCalmPower(BtlActIChr *chr) {
+    s32 p = chr->player & 1;
+    f32 low = Port_ModValue("ui_mastered_anxious_power", 0.5f);
+
+    if (BtlAct_UltraInstinctFormOf(BtlMember_GetActiveChara(chr)) != 2 || sUiChara[p] < 0) {
+        return 1.0f;
+    }
+    return low + (1.0f - low) * sUiCalm[p];
+}
+
+void BtlAct_UltraInstinctForms(BtlActIChr *chr) {
+    s32 p = chr->player & 1;
+    s32 chara = BtlMember_GetActiveChara(chr);
+    s32 form = BtlAct_UltraInstinctFormOf(chara);
+    BtlActIChr *opp = (BtlActIChr *)(void *)BtlChar_Get(BtlOpp_GetPlayer((void *)chr));
+    s32 taken = *(s32 *)((u8 *)chr + 0xD44);           /* hits of the combo it is taking */
+    s32 dealt = opp != NULL ? *(s32 *)((u8 *)opp + 0xD44) : 0;  /* ... and of the one it is dealing */
+    s32 on = 1;
+
+    if (form == 0) {
+        if (sUiAuto[p]) {
+            chr->skillKiRate &= ~0x200;
+            sUiAuto[p] = 0;
+        }
+        sUiChara[p] = -1;
+        return;
+    }
+    if (chara != sUiChara[p]) {  /* it just entered the form: calm */
+        sUiChara[p] = chara;
+        sUiCalm[p] = 1.0f;
+        sUiOn[p] = 1;
+        sUiTaken[p] = taken;
+        sUiDealt[p] = dealt;
+    }
+    if (form == 2) {
+        BtlActIGauge *g = BtlMember_GetActiveGauge(chr);
+        f32 calm = sUiCalm[p];
+        f32 back = Port_ModValue("ui_mastered_calm_recover", 0.12f) / 30.0f;
+
+        if (taken > sUiTaken[p]) {
+            calm -= (f32)(taken - sUiTaken[p]) * Port_ModValue("ui_mastered_calm_per_hit_taken", 0.12f);
+        } else if (taken == 0) {
+            if (g->healthMax > 0 && (f32)g->health < (f32)g->healthMax * Port_ModValue("ui_mastered_anxious_health", 0.3f)) {
+                back *= Port_ModValue("ui_mastered_anxious_recover", 0.3f);
+            }
+            calm += back;
+        }
+        if (dealt > sUiDealt[p]) {
+            calm += (f32)(dealt - sUiDealt[p]) * Port_ModValue("ui_mastered_calm_per_hit_dealt", 0.03f);
+        }
+        calm = calm < 0.0f ? 0.0f : (calm > 1.0f ? 1.0f : calm);
+        sUiCalm[p] = calm;
+        if (sUiOn[p] && calm < Port_ModValue("ui_mastered_calm_off", 0.35f)) {
+            sUiOn[p] = 0;
+            HudCombo_ShowModeText(chr->player, 3, 0);  /* anxious: the effects leave it */
+        } else if (!sUiOn[p] && calm >= Port_ModValue("ui_mastered_calm_on", 0.65f)) {
+            sUiOn[p] = 1;
+            BtlCharSnd_PlayCommon((void *)chr, 0x14);
+            HudCombo_ShowModeText(chr->player, 2, 0);  /* calm again */
+        }
+        on = sUiOn[p];
+    }
+    sUiTaken[p] = taken;
+    sUiDealt[p] = dealt;
+    if (on) {
+        if (!(chr->skillKiRate & 0x200)) {
+            chr->skillKiRate |= 0x200;
+            sUiAuto[p] = 1;
+        }
+    } else if (sUiAuto[p]) {
+        chr->skillKiRate &= ~0x200;
+    }
+}
+
+/* Mod "Ultra Instinct" v115: the combo breaker. A fighter taking a combo of combo_breaker_hits hits or more (its combo hits, +0xD44) bursts
+   out with the escape's input (lock-on double tap, input 0x2E): the ki burst of action 0x42, which cancels the
+   attacker's strike (flag 0xC9), with the clash flash and sounds. It costs combo_breaker_blast_cost blast stocks and
+   combo_breaker_stamina stamina (the burst takes escape_stamina on top). combo_breaker_hits 0: off. Every frame
+   (BtlAct_UpdateTimers). */
+extern void BtlFx_SpeedClash(void *chr, s32 big);
+
+void BtlAct_ComboBreaker(BtlActIChr *chr) {
+    s32 need = (s32)Port_ModValue("combo_breaker_hits", 15.0f);
+    s32 blast = (s32)(Port_ModValue("combo_breaker_blast_cost", 1.0f) * 100000.0f);
+    s32 stamina = (s32)Port_ModValue("combo_breaker_stamina", 0.0f);
+    s32 hits = *(s32 *)((u8 *)chr + 0xD44);
+    s32 act = BtlAct_GetCurrent(chr);
+
+    if (need <= 0 || hits < need || act < 0xBB || act > 0xE0) {
+        return;  /* (hit reactions, knocked away, falling: 0xBB..0xE0) */
+    }
+    if (!BtlInput_TestAction(chr, 0x2E, 1)) {
+        return;
+    }
+    if ((blast > 0 && !BtlMember_HasBlast(chr, blast)) || (stamina > 0 && !BtlMember_HasStamina(chr, stamina))) {
+        return;
+    }
+    if (blast > 0) {
+        BtlMember_SubBlast(chr, blast);
+    }
+    if (stamina > 0) {
+        BtlMember_PayStamina(chr, stamina);
+    }
+    BtlAct_Request(chr, 0x42);
+    BtlFx_SpeedClash((void *)chr, 1);
+}
+
+/* Mod "Ultra Instinct" v115: god forms. Bits 12..14 of skillKiRate: the god form the fighter is in (1 SSG, 2 SSGSS, 3 Rose, 4 Super
+   Saiyan 4 Limit Breaker); bits 16..18: the one its queued transformation brings (btl_act_j.c). BtlChar_OnModelLoaded (btl_char_mgr.c) makes the
+   queued one current when the transformation's model is loaded (an ordinary transformation queues none), and
+   ends both with a new member or a fusion. */
+s32 BtlAct_GodActive(BtlActIChr *chr) {
+    return (chr->skillKiRate >> 12) & 7;
+}
+
+s32 BtlAct_GodPending(BtlActIChr *chr) {
+    return (chr->skillKiRate >> 16) & 7;
+}
+
+void BtlAct_GodSetPending(BtlActIChr *chr, s32 god) {
+    chr->skillKiRate = (chr->skillKiRate & ~0x70000) | (god << 16);
+}
+
+s32 BtlAct_GodTakePending(BtlActIChr *chr) {
+    s32 god = (chr->skillKiRate >> 16) & 7;
+
+    chr->skillKiRate = (chr->skillKiRate & ~0x77000) | (god << 12);
+    if (god) {
+        HudCombo_ShowModeText(chr->player, god == 4 ? 10 : god >= 5 ? 8 + god : 5 + god, 0);  /* the form's name in the technique banner (13 Ultimate, 14 Beast) */
+    }
+    return god;
+}
+
+/* Mod "Ultra Instinct" v115: the Kaioken level L2 + L1 picks, per player (btl_char_action.c): 0 one level up from the one the fighter
+   is in (stacking), 1..10 that level itself: the next activation goes straight to it. The CPU stacks. */
+extern s32 BtlCharApi_IsInputInjected(s32 objId);
+static s32 sBtlKaiokenChoice[2];
+static s32 sBtlKaiokenPicked[2];  /* v105: L2 + L1 used since the last activation */
+
+static s32 sBtlKaiokenCpuChoice[2];  /* the CPU's (BtlAct_CpuThink, btl_act_j.c) */
+
+static s32 BtlAct_KaiokenChoice(BtlActIChr *chr) {
+    return BtlCharApi_IsInputInjected(chr->player) ? sBtlKaiokenCpuChoice[chr->player & 1]
+                                                   : sBtlKaiokenChoice[chr->player & 1];
+}
+
+/* For the CPU (btl_act_j.c): the level its next Kaioken goes to (0: one level up); the multiplier and the health cost
+   of a level, and the top level. */
+void BtlAct_KaiokenCpuChoose(BtlActIChr *chr, s32 level) {
+    sBtlKaiokenCpuChoice[chr->player & 1] = level < 0 ? 0 : level > BTL_KAIOKEN_MAX ? BTL_KAIOKEN_MAX : level;
+}
+
+f32 BtlAct_KaiokenMultOf(s32 level) {
+    level = level < 0 ? 0 : level > BTL_KAIOKEN_MAX ? BTL_KAIOKEN_MAX : level;
+    return level > 0 ? Port_ModValue(sKaiokenMultKey[level], sKaiokenMult[level]) : 1.0f;
+}
+
+s32 BtlAct_KaiokenHealthOf(s32 level) {
+    level = level < 1 ? 1 : level > BTL_KAIOKEN_MAX ? BTL_KAIOKEN_MAX : level;
+    return (s32)Port_ModValue(sKaiokenHealthKey[level], (f32)sKaiokenHealth[level]);
+}
+
+s32 BtlAct_KaiokenTop(void) {
+    s32 top = (s32)Port_ModValue("kaioken_levels", (f32)BTL_KAIOKEN_MAX);
+
+    return top < 1 ? 1 : top > BTL_KAIOKEN_MAX ? BTL_KAIOKEN_MAX : top;
+}
+
+/* The level the next Kaioken activation reaches. */
+static s32 BtlAct_KaiokenTarget(BtlActIChr *chr) {
+    s32 level = BtlAct_KaiokenLevel(chr);
+    s32 top = (s32)Port_ModValue("kaioken_levels", (f32)BTL_KAIOKEN_MAX);
+    s32 choice = BtlAct_KaiokenChoice(chr);
+
+    if (top > BTL_KAIOKEN_MAX) {
+        top = BTL_KAIOKEN_MAX;
+    }
+    if (choice > 0) {
+        return choice > top ? top : choice;
+    }
+    return level < top ? level + 1 : level;
+}
+
+/* L2 + L1: the next choice (one level up, x2, x3 ... the top level, one level up again), shown in the banner. */
+void BtlAct_KaiokenChoose(BtlActIChr *chr) {
+    s32 side = chr->player & 1;
+    s32 top = (s32)Port_ModValue("kaioken_levels", (f32)BTL_KAIOKEN_MAX);
+    s32 c;
+
+    if (top > BTL_KAIOKEN_MAX) {
+        top = BTL_KAIOKEN_MAX;
+    }
+    c = sBtlKaiokenChoice[side] >= top ? 0 : sBtlKaiokenChoice[side] + 1;
+    sBtlKaiokenChoice[side] = c;
+    sBtlKaiokenPicked[side] = 1;
+    if (c == 0) {
+        HudCombo_ShowModeText(chr->player, 12, 0);  /* "Kaio-ken next: one level up" */
+    } else {
+        HudCombo_ShowModeText(chr->player, 11, (s32)(Port_ModValue(sKaiokenMultKey[c], sKaiokenMult[c]) + 0.5f));
+    }
+}
+
+/* Mod "Ultra Instinct" v115: whether the next Kaioken activation ends it instead: in Kaioken, the player, no L2 + L1 pick since it was
+   activated (kaioken_press_again_ends). */
+static s32 BtlAct_KaiokenWillEnd(BtlActIChr *chr) {
+    return BtlAct_KaiokenLevel(chr) > 0 && !BtlCharApi_IsInputInjected(chr->player) &&
+           !sBtlKaiokenPicked[chr->player & 1] && Port_ModValue("kaioken_press_again_ends", 1.0f) != 0.0f;
+}
+
+/* Mod "Ultra Instinct" v115: Kaioken ends (its buttons again with the same pick). */
+static void BtlAct_KaiokenStop(BtlActIChr *chr) {
+    extern void BtlStat_EndKind4(void *chr);
+
+    BtlChar_ClearFlag(chr, 0x98);
+    BtlObj_SetColorMode(BtlChar_GetObj(chr), 2, 0);
+    BtlStat_EndKind4((void *)chr);
+    chr->skillKiRate &= ~0x1FF;
+}
+
+/* For the skill input (btl_act_j.c): L2 + down + circle in Kaioken with no new pick ends it at once: 1. */
+s32 BtlAct_KaiokenPressEnds(BtlActIChr *chr) {
+    if (!BtlAct_KaiokenWillEnd(chr)) {
+        return 0;
+    }
+    BtlAct_KaiokenStop(chr);
+    return 1;
+}
+
+/* For the technique name banner (hud_c_b.c): the multiplier of the Kaioken whose skill action side `side`'s fighter
+   is in (its own skill 0x18, or L2 + down + circle), else 0. */
+s32 BtlAct_KaiokenBanner(s32 side) {
+    BtlActIChr *chr = (BtlActIChr *)(void *)BtlChar_Get(side);
+    s32 level;
+    s32 top;
+    s32 act;
+
+    if (chr == NULL || BtlAct_KaiokenWillEnd(chr)) {
+        return 0;  /* (v105: one that ends it: no multiplier) */
+    }
+    act = BtlAct_GetCurrent((void *)chr);
+    if (act < 0xFD || act > 0x102) {
+        return 0;
+    }
+    if (!(chr->skillKiRate & 0x900) && BtlSkill_GetId(chr, BtlAct_GetCurrentClass(chr)) != 0x18) {
+        return 0;
+    }
+    level = BtlAct_KaiokenLevel(chr);
+    top = (s32)Port_ModValue("kaioken_levels", (f32)BTL_KAIOKEN_MAX);
+    if (top > BTL_KAIOKEN_MAX) {
+        top = BTL_KAIOKEN_MAX;
+    }
+    if ((chr->skillKiRate & 0x100) || level == 0) {
+        level = BtlAct_KaiokenTarget(chr);  /* the level it is going to */
+    }
+    (void)top;
+    return (s32)(Port_ModValue(sKaiokenMultKey[level], sKaiokenMult[level]) + 0.5f);
+}
+
+/* Mod "Ultra Instinct" v115: the strain of Kaioken on the body: a level costs kaioken_strain_cost of the maximum health times
+   (multiplier / tolerance) ^ kaioken_strain_exponent. The tolerance: the character's (Port_ModKaiokenTolerance:
+   abilities.csv, a halo multiplies it), times the maximum health over kaioken_reference_health (a body trained to more
+   health takes more). kaioken_strain 0: the fixed costs kaioken_health_1..10. */
+extern float Port_ModKaiokenTolerance(int chara, int costume);
+extern int Port_ModHaloCostume(int chara, int costume);
+extern s32 BtlMember_HasAbility(BtlActIChr *chr, s32 n);
+extern f32 powf(f32 x, f32 y);
+
+s32 BtlAct_KaiokenCostFor(BtlActIChr *chr, s32 level) {
+    BtlActIGauge *g = BtlMember_GetActiveGauge(chr);
+    f32 t;
+    f32 cost;
+
+    level = level < 1 ? 1 : level > BTL_KAIOKEN_MAX ? BTL_KAIOKEN_MAX : level;
+    if (Port_ModValue("kaioken_strain", 1.0f) == 0.0f || g->healthMax <= 0) {
+        return (s32)Port_ModValue(sKaiokenHealthKey[level], (f32)sKaiokenHealth[level]);
+    }
+    {
+        s32 chara = BtlMember_GetActiveChara(chr);
+        s32 costume = *(s32 *)((u8 *)BtlMember_GetActive((void *)chr) + 4);  /* (the member's costume) */
+        s32 halo = BtlMember_HasAbility(chr, 0x79) || Port_ModHaloCostume(chara, costume);
+        f32 top;
+
+        t = Port_ModKaiokenTolerance(chara, costume);
+        if (halo) {
+            t *= Port_ModValue("kaioken_halo_tolerance", 5.0f);  /* a halo: the Halo capsule, or a dead fighter's costume */
+        }
+        t *= (f32)g->healthMax / Port_ModValue("kaioken_reference_health", 40000.0f);
+        /* Mod "Ultra Instinct" v115: the ceiling, however trained the body (x20 never comfortable; with a halo, x50) */
+        top = halo ? Port_ModValue("kaioken_halo_tolerance_max", 35.0f) : Port_ModValue("kaioken_tolerance_max", 14.0f);
+        if (top > 0.0f && t > top) {
+            t = top;
+        }
+    }
+    if (t < 1.0f) {
+        t = 1.0f;
+    }
+    {
+        f32 r = BtlAct_KaiokenMultOf(level) / t;  /* Mod "Ultra Instinct" v115: past the tolerance the strain climbs faster */
+
+        f32 share = powf(r, r <= 1.0f ? Port_ModValue("kaioken_strain_exponent", 1.0f)
+                                      : Port_ModValue("kaioken_strain_exponent_over", 2.5f));
+
+        if (Port_ModValue("kaioken_drain", 1.0f) != 0.0f) {
+            /* v102: a drain each second (BtlAct_KaiokenTick); what is weighed: kaioken_cpu_seconds of it */
+            cost = (f32)g->healthMax * Port_ModValue("kaioken_drain_per_second", 0.03f) * share *
+                   Port_ModValue("kaioken_cpu_seconds", 10.0f);
+        } else {
+            cost = (f32)g->healthMax * Port_ModValue("kaioken_strain_cost", 0.2f) * share;
+        }
+    }
+    return cost < 1.0f ? 1 : cost > 1000000.0f ? 1000000 : (s32)cost;
+}
+
+/* Whether the body can take the level the next Kaioken goes to (the health left pays it; always with kaioken_can_ko). */
+s32 BtlAct_KaiokenBodyOk(BtlActIChr *chr) {
+    if (Port_ModValue("kaioken_can_ko", 0.0f) != 0.0f) {
+        return 1;
+    }
+    if (Port_ModValue("kaioken_drain", 1.0f) != 0.0f) {  /* v102: not one that would end it within a second */
+        return (f32)BtlAct_KaiokenCostFor(chr, BtlAct_KaiokenTarget(chr)) / Port_ModValue("kaioken_cpu_seconds", 10.0f) <
+               (f32)BtlMember_GetActiveGauge(chr)->health;
+    }
+    return BtlAct_KaiokenCostFor(chr, BtlAct_KaiokenTarget(chr)) < BtlMember_GetActiveGauge(chr)->health;
+}
+
+/* The multiplier of the level the next Kaioken goes to (the refusal's banner). */
+s32 BtlAct_KaiokenNextMult(BtlActIChr *chr) {
+    return (s32)(BtlAct_KaiokenMultOf(BtlAct_KaiokenTarget(chr)) + 0.5f);
+}
+
+static void BtlSkill_KaiokenActivate(BtlActIChr *chr) {
+    BtlActIGauge *g = BtlMember_GetActiveGauge(chr);
+    s32 level = BtlAct_KaiokenLevel(chr);
+
+    if (BtlAct_KaiokenWillEnd(chr)) {
+        BtlAct_KaiokenStop(chr);  /* Mod "Ultra Instinct" v115: the buttons again with the same pick: Kaioken ends */
+        (void)g;
+        return;
+    }
+    sBtlKaiokenPicked[chr->player & 1] = 0;
+    level = BtlAct_KaiokenTarget(chr);  /* one level up, or the one L2 + L1 picked */
+    if (!BtlAct_KaiokenBodyOk(chr)) {
+        HudCombo_ShowModeText(chr->player, 15, (s32)(BtlAct_KaiokenMultOf(level) + 0.5f));  /* the body can't take it */
+        return;
+    }
+    /* kaioken_can_ko = 1: a cost above the health left knocks the fighter out (0x41B less BTL_DMG_NO_KILL); with
+       kaioken_drain the health goes through time instead (BtlAct_KaiokenTick) */
+    if (Port_ModValue("kaioken_drain", 1.0f) == 0.0f) {
+        BtlMember_Damage(chr, BtlAct_KaiokenCostFor(chr, level),
+                         Port_ModValue("kaioken_can_ko", 0.0f) != 0.0f ? 0x01B : 0x41B);
+    }
+    (void)g;
+    BtlMember_PayStamina(chr, BTL_KAIOKEN_STAMINA);
+    BtlChar_SetHeldFlag(chr, 0x98);
+    BtlChar_SetFlag(chr, 0x99);
+    BtlObj_SetColorMode(BtlChar_GetObj(chr), 2, 1);
+    chr->skillKiRate = (chr->skillKiRate & ~0x1FF) | level;  /* the modes, the marker and the god form stay */
+}
+
+/* Mod "Ultra Instinct" v115: every frame (BtlAct_UpdateTimers): Kaioken tears the health apart while it lasts (kaioken_drain: its strain
+   each second), and a body that regenerates (abilities.csv regen: a share of its maximum health a second, the
+   Namekians) gets it back, not while it is taking a combo. Without kaioken_can_ko, at its last bit of health Kaioken
+   ends instead; with it, the drain can knock the fighter out. */
+extern float Port_ModRegen(int chara);
+extern void BtlStat_EndKind4(void *chr);
+static f32 sBtlKaiokenDrain[2];
+static f32 sBtlRegen[2];
+
+void BtlAct_KaiokenTick(BtlActIChr *chr) {
+    BtlActIGauge *g = BtlMember_GetActiveGauge(chr);
+    s32 p = chr->player & 1;
+    s32 level = BtlAct_KaiokenLevel(chr);
+    f32 regen = Port_ModRegen(BtlMember_GetActiveChara(chr));
+    s32 ko = Port_ModValue("kaioken_can_ko", 0.0f) != 0.0f;
+    s32 whole;
+
+    if (g->health <= 0 || g->healthMax <= 0) {
+        sBtlKaiokenDrain[p] = 0.0f;
+        sBtlRegen[p] = 0.0f;
+        return;
+    }
+    if (level > 0 && Port_ModValue("kaioken_drain", 1.0f) != 0.0f) {
+        sBtlKaiokenDrain[p] += (f32)BtlAct_KaiokenCostFor(chr, level) / Port_ModValue("kaioken_cpu_seconds", 10.0f) / 30.0f;
+        whole = (s32)sBtlKaiokenDrain[p];
+        if (whole > 0) {
+            sBtlKaiokenDrain[p] -= (f32)whole;
+            if (g->health - whole <= 1 && !ko) {
+                g->health = 1;  /* the body gives out: Kaioken ends */
+                BtlChar_ClearFlag(chr, 0x98);
+                BtlObj_SetColorMode(BtlChar_GetObj(chr), 2, 0);
+                BtlStat_EndKind4((void *)chr);
+                chr->skillKiRate &= ~0x1FF;
+                sBtlKaiokenDrain[p] = 0.0f;
+            } else if (g->health - whole <= 0) {
+                BtlMember_Damage(chr, whole, 0x01B);  /* the last of it: knocked out (kaioken_can_ko) */
+            } else {
+                g->health -= whole;
+            }
+        }
+    } else {
+        sBtlKaiokenDrain[p] = 0.0f;
+    }
+    if (regen > 0.0f && g->health > 0 && g->health < g->healthMax && *(s32 *)((u8 *)chr + 0xD44) == 0) {
+        sBtlRegen[p] += regen * (f32)g->healthMax / 30.0f;
+        whole = (s32)sBtlRegen[p];
+        if (whole > 0) {
+            sBtlRegen[p] -= (f32)whole;
+            g->health = g->health + whole > g->healthMax ? g->healthMax : g->health + whole;
+        }
+    } else {
+        sBtlRegen[p] = 0.0f;
+    }
+}
+
+/* For the CPU (btl_act_j.c): the health the next Kaioken level costs; -1 at the top level. */
+s32 BtlAct_KaiokenNextHealth(BtlActIChr *chr) {
+    s32 level = BtlAct_KaiokenLevel(chr);
+    s32 top = (s32)Port_ModValue("kaioken_levels", (f32)BTL_KAIOKEN_MAX);
+
+    if (top > BTL_KAIOKEN_MAX) {
+        top = BTL_KAIOKEN_MAX;
+    }
+    if (level >= top) {
+        return -1;
+    }
+    level++;
+    return BtlAct_KaiokenCostFor(chr, level);
+}
+#endif
+
 /*
  * Applies the skill of a slot (0 / 1): the special cases by skill id, health and ki changes, the four stat
  * modifiers by the skill's kind, the two timed values, the use counter, and the blast stock cost.
  */
+#ifdef PORT
+extern void BtlAct_TimeSkipStart(void *chr, s32 slot);  /* Mod "Ultra Instinct" v115: Hit's Time-Skip (btl_char_action.c) */
+#endif
+
 void BtlSkill_Apply(BtlActIChr *chr, s32 slot) {
     s32 idx = slot != 0;
     s32 id = BtlSkill_GetId(chr, slot);
@@ -1783,6 +2374,15 @@ void BtlSkill_Apply(BtlActIChr *chr, s32 slot) {
     valE = BtlSkill_GetValE(chr, slot);
     valF = BtlSkill_GetValF(chr, slot);
     add = (attr >> 8) & 1;
+#ifdef PORT
+    BtlAct_TimeSkipStart((void *)chr, slot);  /* Hit's Time-Skip (only his) */
+#endif
+#ifdef PORT
+    if (id == 0x18 || (chr->skillKiRate & 0x100)) {
+        BtlSkill_KaiokenActivate(chr);
+        return;
+    }
+#endif
 
     switch (id) {
     case 0xC:
@@ -1974,6 +2574,11 @@ s32 BtlAct_SkillBasic(BtlActIChr *chr, s32 phase) {
         }
     }
     if (phase == 1) {
+#ifdef PORT
+        if (chr->skillKiRate & 0x800) {
+            BtlChar_SetFxBit((void *)chr, 7);  /* Mod "Ultra Instinct" v115: Kaioken's aura charges up (btl_char_fx.c) */
+        }
+#endif
         if (!BtlChar_TestFlag(chr, 0xE) && !BtlChar_TestFlag(chr, 0xF)) {
             BtlChar_SetHeldFlag(chr, 0xE);
         }
@@ -2016,6 +2621,9 @@ s32 BtlAct_SkillBasic(BtlActIChr *chr, s32 phase) {
         }
     }
     if (phase == 3) {
+#ifdef PORT
+        chr->skillKiRate &= ~0x800;
+#endif
         switch (BtlSkill_GetId(chr, cls)) {
         case 0x18:
             if (!BtlChar_TestFlag(chr, 0x98)) {
@@ -2162,7 +2770,11 @@ s32 BtlDecide_Main(BtlActIChr *chr, s32 mask) {
     if (!BtlChar_IsFree(chr)) {
         return 0;
     }
+#ifdef PORT
+    if ((mask & 0x10000000) && BtlMember_HasStamina(chr, BTL_ESCAPE_STAMINA)) {
+#else
     if ((mask & 0x10000000) && BtlMember_HasHealth(chr, 5000)) {
+#endif
         BtlColl_AddActionBit(chr, 0x42);
         if (TEST(0x2E)) {
             BtlAct_SetQueue(chr, 0, 0x42);
@@ -2270,7 +2882,11 @@ s32 BtlDecide_Main(BtlActIChr *chr, s32 mask) {
     if ((mask & 0x800000) && BtlAct_CheckSkillInput(chr)) {
         return 1;
     }
+#ifdef PORT
+    if ((mask & 0x80) && !BtlChar_TestFlag(chr, 6)) {  /* Mod "Ultra Instinct" v115: also in Kaioken */
+#else
     if ((mask & 0x80) && !BtlChar_TestFlag(chr, 6) && !BtlChar_TestFlag(chr, 0x98)) {
+#endif
         if (BtlParam_GetUnk0(chr) & 0x80) {
             if (BtlMember_IsKiFull(chr) && BtlMember_HasBlast(chr, 100000) && TEST(0x13)) {
                 BtlAct_SetQueue(chr, 0, 0x37);
@@ -2715,7 +3331,11 @@ s32 BtlDecide_Attack(BtlActIChr *chr, s32 mask) {
         if (ret > 0) {
             return ret;
         }
+#ifdef PORT
+        if (chr->unkD70 < chr->unkD74 || Port_ModValue("vanish_unlimited", 1.0f) != 0.0f) {  /* Mod "Ultra Instinct" v115: unlimited */
+#else
         if (chr->unkD70 < chr->unkD74) {
+#endif
             if (BtlParam_GetFlags2(chr) & 0x2000) {
                 BtlColl_AddActionBit(chr, 0x5C);
                 if (TEST(0x44)) {

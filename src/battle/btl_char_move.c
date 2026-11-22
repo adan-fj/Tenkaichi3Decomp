@@ -797,6 +797,13 @@ void BtlMove_Step(BtlMoveChr *chr, s32 yawMode, s32 pitchMode, s32 dirMode, f32 
 }
 
 /* Lock-on only: places the fighter on the opponent's path, `lead` frames ahead plus both radii, inside the stage radius. */
+#ifdef PORT
+/* Mod "Ultra Instinct" v115: the strike after the warp runs at the fighter's attack speed (btl_char_status_anim.c): it hits
+   after lead / speed frames, so the opponent is looked for there (vanish_lead_follows_speed 0: the game's lead) */
+extern f32 BtlAnim_AttackRate(BtlMoveChr *chr);
+extern f32 Port_ModValue(const char *key, f32 def);
+#endif
+
 void BtlMove_WarpAheadOfOpponent(BtlMoveChr *chr, f32 lead) {
     Vec4 opp;
     Vec4 oppVel;
@@ -805,6 +812,15 @@ void BtlMove_WarpAheadOfOpponent(BtlMoveChr *chr, f32 lead) {
     Vec4 rot;
     BtlMovePose *pose = BtlChar_GetPos(chr);
 
+#ifdef PORT
+    if (Port_ModValue("vanish_lead_follows_speed", 1.0f) != 0.0f) {
+        f32 rate = BtlAnim_AttackRate(chr);
+
+        if (rate > 1.0f) {
+            lead /= rate;
+        }
+    }
+#endif
     if (BtlChar_TestFlag(chr, 5)) {
         f32 min;
         f32 rad;
@@ -1027,7 +1043,15 @@ void BtlMove_CalcApproachPoint(BtlMoveChr *chr, Vec4 *out, Vec4 *outTarget, f32 
     if (tgt.y < top) {
         tgt.y = top;
     }
+#ifdef PORT
+    {
+        extern f32 BtlStage_GetHoldBottom(void);  /* Mod "Ultra Instinct" v115 */
+
+        bottom = BtlStage_GetHoldBottom() + oppScale * 0.5f;
+    }
+#else
     bottom = BtlStage_GetBottom() + oppScale * 0.5f;
+#endif
     if (bottom < tgt.y) {
         f32 len3;
         f32 lenXZ;
@@ -1166,6 +1190,9 @@ s32 BtlMove_IsBlockedByOpponent(BtlMoveChr *chr) {
     return 0;
 }
 
+#ifdef PORT
+extern f32 Port_ModValue(const char *key, f32 def);
+#endif
 /* Stage 8: keeps the position inside the stage's limit cylinder and raises the contact flags: 0x14 radius,
    0x15 top, 0x16 bottom, 0x17 the y = -10 limit of stages 4 / 27. */
 void BtlMove_ClampToStage(BtlMoveChr *chr) {
@@ -1195,7 +1222,12 @@ void BtlMove_ClampToStage(BtlMoveChr *chr) {
         }
     }
     if (!BtlChar_IsDead(chr)) {
+#ifdef PORT
+        extern f32 BtlStage_GetHoldBottom(void);
+        f32 bottom = BtlStage_GetHoldBottom();  /* Mod "Ultra Instinct" v115: no bottom barrier */
+#else
         f32 bottom = BtlStage_GetBottom();
+#endif
 
         bottom += BtlCharApi_GetHeight(chr->objId) * 0.5f;
         if (bottom < pose->pos.y) {
@@ -1207,7 +1239,11 @@ void BtlMove_ClampToStage(BtlMoveChr *chr) {
     }
     BtlChar_ClearFlag(chr, 0x17);
     if (BtlChar_IsStage4Or27()) {
-        if (BtlChar_IsFree(chr) && !BtlChar_TestFlag(chr, 0x2A) && !BtlChar_TestFlag(chr, 7) && -10.0f < pose->pos.y) {
+        if (BtlChar_IsFree(chr) && !BtlChar_TestFlag(chr, 0x2A) && !BtlChar_TestFlag(chr, 7) && -10.0f < pose->pos.y
+#ifdef PORT
+            && Port_ModValue("ring_floor_barrier", 0.0f) != 0.0f  /* Mod "Ultra Instinct" v115 */
+#endif
+        ) {
             pose->pos.y = -10.0f;
             BtlChar_SetHeldFlag(chr, 0x17);
         }

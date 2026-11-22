@@ -699,6 +699,10 @@ static inline BtlTechAtkAction *BtlAtk_GetActionRow(s32 n) {
     return c
 
 /* The id of the attack record the fighter's current action / animation uses, -1 when it is not attacking. */
+#ifdef PORT
+extern s32 BtlAct_EndlessChain(BtlTechChr *chr);  /* Mod "Ultra Instinct" v115: the endless rush (btl_char_action.c) */
+#endif
+
 s32 BtlAtk_GetId(BtlTechChr *chr) {
     BtlTechObj *obj = BtlChar_GetObj(chr);
     f32 charge = chr->charge;
@@ -719,6 +723,26 @@ s32 BtlAtk_GetId(BtlTechChr *chr) {
     last = BtlObjAnim_QueryEvent(obj, 1, 0, 2);
     switch (action) {
         case 0x46:
+#ifdef PORT
+            /* Mod "Ultra Instinct" v115: the endless air rush (btl_act_a.c): every hit, 1-4 too, with the air rush's own hit
+               data, which keeps the opponent where it is (the ground rush's pushes it away: the next press is a
+               dash), and never the 4th hit's (0x51), which sets up the finish (a stagger the next hit misses) */
+            if (BtlAct_EndlessChain(chr)) {
+                switch (anim) {
+                    case 0x37:
+                    case 0x3C:
+                        return 0x4E;
+                    case 0x38:
+                    case 0x3A:
+                    case 0x3D:
+                        return 0x4F;
+                    case 0x39:
+                    case 0x3E:
+                    case 0x3F:
+                        return 0x50;
+                }
+            }
+#endif
             switch (anim) {
                 case 0x3C:
                     return 0x4E;
@@ -1356,9 +1380,19 @@ s32 BtlParam_GetSlotId(BtlTechChr *chr, s32 slot) {
 }
 
 /* Parameter +0x9C + slot, times 100000: blast gauge a transformation costs. */
+#ifdef PORT
+/* Mod "Ultra Instinct" v115: the transformations' blast stock cost times transform_stock_cost (0: free; the forms drain stamina
+   instead, power_levels.csv stamina_drain) */
+extern f32 Port_ModValue(const char *key, f32 def);
+
+s32 BtlParam_GetSlotCost(BtlTechChr *chr, s32 slot) {
+    return (s32)((f32)(BtlChar_GetObj(chr)->param->transCost[slot] * 100000) * Port_ModValue("transform_stock_cost", 0.0f));
+}
+#else
 s32 BtlParam_GetSlotCost(BtlTechChr *chr, s32 slot) {
     return BtlChar_GetObj(chr)->param->transCost[slot] * 100000;
 }
+#endif
 
 /* Parameter +0xA0 + slot. */
 s32 BtlParam_GetSlotA0(BtlTechChr *chr, s32 slot) {

@@ -357,6 +357,928 @@ void BtlChar_Reset(BtlMgrChr *chr) {
     }
 }
 
+#ifdef PORT
+extern void BtlAct_EndFlag98(BtlMgrChr *chr);  /* Mod "Ultra Instinct" v115 */
+#endif
+#ifdef PORT
+/* Mod "Ultra Instinct" v115: a god form's colours, recoloured in memory when its model is loaded (a new model or member loads
+   them afresh); both palettes are uploaded from memory every frame. The model: the palette entries god_palettes.csv
+   lists for model `model`, file `file` (costume, +4 the damaged variant), by Port_ModGodRecolor (hair, part 0;
+   eyes, part 1; eyebrows, part 2) and Port_ModGodRecolorFur (fur, part 3). The charge particles: palette god_charge_texture (2: gold in a Super Saiyan's effect data, pale
+   blue in a base form's) of the charge set (entry 2 of the character pack, its texture file is entry 2 of that),
+   by Port_ModGodChargeRecolor. Only red, green and blue change: a palette's alpha bytes stay. Texture files are
+   read by their word offsets, which stay valid once relocated. */
+extern s32 Port_ModGodMask(s32 model, s32 file, s32 texture, s32 part);
+extern void Port_ModGodRecolor(u8 *rgb, s32 form, s32 part);
+extern void Port_ModGodRecolorHair(u8 *clut, s32 mask, s32 form, const s32 *counts);
+extern void Port_ModGodRecolorFur(u8 *clut, s32 mask, s32 form);
+extern void Port_ModGodChargeRecolor(u8 *rgb, s32 form);
+extern f32 Port_ModValue(const char *key, f32 def);
+extern s32 Port_ModGodRecolorOn(s32 form);
+extern s32 Port_ModGodBrowOutline(s32 form);
+extern s32 *BtlScene_GetCharPackEntry(s32 side, s32 idx);
+extern s32 *BtlScene_GetPackEntry(s32 *base, s32 idx);
+static s32 sBtlGodKeep;  /* the god bits of the fighter whose model was loaded, across BtlChar_BindObject */
+
+void BtlGod_RecolorCharge(s32 side, s32 *pack);
+static s32 BtlGod_IsColorTable(f32 *t);
+extern void Port_ModGodChargeRecolorF(f32 *rgb, s32 form);
+extern void Port_ModGodLog(const char *what, s32 a, s32 b, s32 c, s32 d);
+
+static u8 *BtlGod_Clut(u8 *tex, s32 i, s32 *colors) {
+    u32 count = *(u32 *)tex;
+    u8 *ent;
+    u32 ofs;
+    s32 size;
+
+    if ((u32)i >= count || count > 256) {
+        return NULL;
+    }
+    ent = tex + *(u32 *)(tex + 4) * 4 + i * 0x40;
+    ofs = *(u32 *)(ent + 4);   /* TexEntry.clutOfs */
+    size = *(s32 *)(ent + 0xC);  /* TexEntry.clutSize: the packet, its colours from +0x60 */
+    if (ofs == 0 || size <= 0x60) {
+        return NULL;
+    }
+    *colors = (size - 0x60) / 4 >= 256 ? 256 : 16;
+    return tex + ofs * 4 + 0x60;
+}
+
+/* How many pixels of texture `i` of the texture file `tex` use each of its 16 colours: the 4-bit data after the upload
+   packet's 0x60-byte head, its size from the head's TRXREG (32-bit pixels). The count does not depend on the layout. */
+static void BtlGod_TexCounts(u8 *tex, s32 i, s32 *counts) {
+    u8 *ent = tex + *(u32 *)(tex + 4) * 4 + i * 0x40;
+    u8 *pk = tex + *(u32 *)ent * 4;  /* TexEntry.pixOfs */
+    u32 size = *(u32 *)(ent + 8);  /* TexEntry.pixSize */
+    u32 n = *(u32 *)(pk + 0x30) * *(u32 *)(pk + 0x34) * 4;
+    u32 k;
+    s32 j;
+
+    for (j = 0; j < 16; j++) {
+        counts[j] = 0;
+    }
+    if (size <= 0x60 || n > size - 0x60) {
+        return;  /* not the expected packet: the brightness ranks then */
+    }
+    for (k = 0; k < n; k++) {
+        counts[pk[0x60 + k] & 15]++;
+        counts[pk[0x60 + k] >> 4]++;
+    }
+}
+
+void BtlGod_RecolorModel(BtlMgrChr *chr, s32 god, s32 model, s32 file) {
+    u8 *obj = (u8 *)BtlChar_GetObj(chr);
+    u8 *tex;
+    u8 *clut;
+    s32 *pack;
+    s32 colors;
+    s32 i;
+    s32 part;
+    s32 j;
+
+    tex = obj != NULL && Port_ModGodRecolorOn(god) ? *(u8 **)(obj + 0x48) : NULL;  /* BtlObj.mdl.tex: the model's texture file (none: the form keeps the model's colours) */
+    for (i = 0; tex != NULL && i < (s32)*(u32 *)tex && i < 256; i++) {
+        clut = BtlGod_Clut(tex, i, &colors);
+        if (clut == NULL || colors != 16) {
+            continue;
+        }
+        for (part = 0; part < 5; part++) {  /* hair, eyes, eyebrows, fur, eyebrow outlines */
+            s32 mask = Port_ModGodMask(model, file, i, part);
+
+            if (part == 4) {
+                if (!Port_ModGodBrowOutline(god)) {
+                    continue;
+                }
+                for (j = 0; j < 16; j++) {
+                    if (mask & (1 << j)) {
+                        Port_ModGodRecolor(clut + j * 4, god, 2);  /* as the eyebrows */
+                    }
+                }
+                continue;
+            }
+
+            if (part == 3) {
+                Port_ModGodRecolorFur(clut, mask, god);  /* a ramp by brightness */
+                continue;
+            }
+            if (part == 0) {
+                s32 counts[16];
+
+                BtlGod_TexCounts(tex, i, counts);
+                Port_ModGodRecolorHair(clut, mask, god, counts);  /* the whole palette at once: a ramp */
+                continue;
+            }
+            for (j = 0; j < 16; j++) {
+                if (mask & (1 << j)) {
+                    Port_ModGodRecolor(clut + j * 4, god, part);
+                }
+            }
+        }
+    }
+    BtlGod_RecolorCharge(chr->side, BtlScene_GetCharPackEntry(chr->side, 2));
+}
+
+/* The charge set `pack` (entry 2 of the character pack) of the fighter of side `side`, in its god form's colour:
+   called with the model (above) and when the charge effect loads the set (eft_r.c). Recolouring twice gives the
+   same colours. */
+static void BtlGod_RecolorPackAs(s32 side, s32 *pack, s32 god, const u8 *orig);
+
+void BtlGod_RecolorCharge(s32 side, s32 *pack) {
+    BtlMgrChr *chr = BtlChar_Get(side);
+    s32 bits;
+    s32 god;
+
+    if (chr == NULL || pack == NULL || Port_ModValue("god_charge_recolor", 1.0f) == 0.0f) {
+        Port_ModGodLog("charge-skip", side, chr != NULL, pack != NULL, 0);
+        return;
+    }
+    bits = *(s32 *)((u8 *)chr + 0xE10);
+    god = (bits >> 12) & 7;  /* the god form, or the one being taken */
+    if (god == 0) {
+        god = (bits >> 16) & 7;
+    }
+    if (god == 0) {
+        Port_ModGodLog("charge-nogod", side, bits, 0, 0);
+        return;
+    }
+    if (BtlMember_GetActive(chr)->chara >= 0xA5) {  /* an added fighter (BT4): its effect data has its own colours */
+        Port_ModGodLog("charge-own", side, god, BtlMember_GetActive(chr)->chara, 0);
+        return;
+    }
+    Port_ModGodLog("charge", side, god, pack[0], BtlMember_GetActive(chr)->chara);
+    BtlGod_RecolorPackAs(side, pack, god, NULL);
+}
+
+/* Recolours the charge set `pack` for `god` (a god form 1..4, or 0x1000 + a hue: Port_ModGodChargeRecolor; 0 none);
+   with `orig` (an untouched copy of the set) each colour is first taken from it, so recolouring again starts
+   afresh. */
+static void BtlGod_RecolorPackAs(s32 side, s32 *pack, s32 god, const u8 *orig) {
+    u8 *clut;
+    s32 colors;
+    s32 j;
+
+    /* every texture file among the entries of the set (several: the swirl, the ring, the sparks...), each palette
+       (white and grey stay) */
+    for (j = 1; j <= pack[0] && j < 256; j++) {
+        u32 a = (u32)pack[j] >> 2 << 2;
+        u32 b = (u32)pack[j + 1] >> 2 << 2;
+        u8 *tex = (u8 *)pack + a;
+        u32 cnt;
+        u32 eo;
+        s32 i;
+        s32 k;
+
+        if (b - a < 0x20) {
+            continue;
+        }
+        cnt = *(u32 *)tex;
+        eo = *(u32 *)(tex + 4);
+        if (cnt == 0 || cnt > 63 || eo * 4 + cnt * 0x40 > b - a) {
+            continue;  /* not a texture file */
+        }
+        for (i = 0; i < (s32)cnt; i++) {
+            u32 co = *(u32 *)(tex + eo * 4 + i * 0x40 + 4);
+            s32 cs = *(s32 *)(tex + eo * 4 + i * 0x40 + 0xC);
+
+            if (co == 0 || cs <= 0x60 || co * 4 + (u32)cs > b - a) {
+                continue;
+            }
+            clut = tex + co * 4 + 0x60;
+            colors = (cs - 0x60) / 4 >= 256 ? 256 : 16;
+            Port_ModGodLog("charge-palette", side, j, i, colors);
+            for (k = 0; k < colors; k++) {
+                if (orig != NULL) {
+                    u32 at = (u32)(clut + k * 4 - (u8 *)pack);
+
+                    clut[k * 4] = orig[at];
+                    clut[k * 4 + 1] = orig[at + 1];
+                    clut[k * 4 + 2] = orig[at + 2];
+                }
+                Port_ModGodChargeRecolor(clut + k * 4, god);
+            }
+        }
+    }
+    /* the colour tables of its particles: 320-byte entries of 20 colours (four floats: red, green, blue 0..255 and a
+       fourth value); a base form's blue comes from them, not from the palette */
+    for (j = 1; j <= pack[0] && j < 256; j++) {
+        u32 a = (u32)pack[j] >> 2 << 2;
+        u32 b = (u32)pack[j + 1] >> 2 << 2;
+
+        if (b - a == 320 && BtlGod_IsColorTable((f32 *)((u8 *)pack + a))) {
+            s32 q;
+
+            for (q = 0; q < 20; q++) {
+                if (orig != NULL) {
+                    s32 c;
+
+                    for (c = 0; c < 12; c++) {
+                        ((u8 *)pack)[a + q * 16 + c] = orig[a + q * 16 + c];
+                    }
+                }
+                Port_ModGodChargeRecolorF((f32 *)((u8 *)pack + a) + q * 4, god);
+            }
+            Port_ModGodLog("charge-table", side, j, 0, 0);
+        }
+    }
+}
+
+/* The charge sets beside a fighter's own (eft_r.c): `k` 0 Goku Ultra Instinct's (Ultra Instinct on), 1..6 god form
+   k's (god_<form>_charge_from; Ultimate and Beast: Ultimate Gohan's); NULL when there is none. */
+extern void *Port_ModChargeSetPack(s32 which, s32 side);  /* side -1: the untouched copy */
+extern s32 Port_ModUiChargeHue(s32 god, s32 aura);
+extern s32 BtlCharApi_GetAuraType(s32 objId);
+
+s32 *BtlGod_ChargeAltPack(s32 side, s32 k) {
+    return BtlChar_Get(side) != NULL ? (s32 *)Port_ModChargeSetPack(k, side) : NULL;
+}
+
+/* At the start of a charge: which set it shows (-1 its own, else `k` as above), that set first recoloured: in Ultra
+   Instinct Goku Ultra Instinct's, in the form's colour (Port_ModUiChargeHue: its god form's, else its aura type's:
+   Super Saiyan gold, Kaioken red...); in a god form with a set of its own, that set (god_<form>_charge_hue; -1 its
+   own colours). */
+s32 BtlGod_ChargePick(s32 side) {
+    BtlMgrChr *chr = BtlChar_Get(side);
+    s32 *pack;
+    s32 bits;
+    s32 god;
+    s32 hue;
+
+    if (chr == NULL) {
+        return -1;
+    }
+    bits = *(s32 *)((u8 *)chr + 0xE10);
+    god = (bits >> 12) & 7;
+    if (god == 0) {
+        god = (bits >> 16) & 7;
+    }
+    if (BtlMember_HasAbility(chr, 0x7E)) {
+        pack = (s32 *)Port_ModChargeSetPack(0, side);
+        if (pack != NULL) {
+            hue = Port_ModUiChargeHue(god, BtlCharApi_GetAuraType(side));
+            BtlGod_RecolorPackAs(side, pack, hue >= 0 ? 0x1000 + hue : 0, (const u8 *)Port_ModChargeSetPack(0, -1));
+            Port_ModGodLog("ui-charge", side, god, hue, pack[0]);
+            return 0;
+        }
+    }
+    if (god >= 1 && god <= 6) {
+        pack = (s32 *)Port_ModChargeSetPack(god, side);
+        if (pack != NULL) {
+            BtlGod_RecolorPackAs(side, pack, god, (const u8 *)Port_ModChargeSetPack(god, -1));
+            Port_ModGodLog("god-charge", side, god, pack[0], 0);
+            return god;
+        }
+    }
+    return -1;
+}
+
+/* The transformation effect of a god form: its emitter set (a common pack entry and the entries after it) recoloured
+   in memory while it plays, the bytes saved first and put back when it ends (the set is shared: Frieza's, Bojack's...
+   own transformations keep their colours). Only the bytes the recolouring changed go back, and only where they still
+   hold its colour: the game writes into the set while it plays (a sprite animation pack's key pointers,
+   EftSprPack_Bind), and those must stay (Super Saiyan 4's effect: a sprite drawn after the end read a null pointer). */
+extern s32 *BtlScene_GetCommonEntry(s32 idx);
+extern s32 BtlCharApi_GodTarget(s32 objId);
+extern s32 Port_ModGodFxOn(s32 form);
+extern void Port_ModGodFxRecolor(u8 *rgba, s32 form);
+extern void Port_ModGodFxRecolorF(f32 *rgba, s32 form);
+static u8 sGodFxSave[0x18000];
+static u8 sGodFxMod[0x18000];  /* the same bytes recoloured */
+static u8 *sGodFxAt;  /* where the saved bytes go back; NULL: nothing saved */
+static u32 sGodFxSize;
+
+static void BtlGod_FxEntry(u8 *e, u32 size, s32 god) {
+    u32 cnt;
+    u32 eo;
+    s32 i;
+    s32 k;
+
+    if (size >= 0x20) {
+        cnt = *(u32 *)e;
+        eo = *(u32 *)(e + 4);
+        if (cnt != 0 && cnt <= 63 && eo * 4 + cnt * 0x40 <= size) {  /* a texture file: every palette */
+            for (i = 0; i < (s32)cnt; i++) {
+                u32 co = *(u32 *)(e + eo * 4 + i * 0x40 + 4);
+                s32 cs = *(s32 *)(e + eo * 4 + i * 0x40 + 0xC);
+                s32 colors;
+
+                if (co == 0 || cs <= 0x60 || co * 4 + (u32)cs > size) {
+                    continue;
+                }
+                colors = (cs - 0x60) / 4 >= 256 ? 256 : 16;
+                for (k = 0; k < colors; k++) {
+                    Port_ModGodFxRecolor(e + co * 4 + 0x60 + k * 4, god);
+                }
+            }
+            return;
+        }
+    }
+    for (i = 0; i + 320 <= (s32)size && size % 320 == 0; i += 320) {  /* particle colour tables */
+        if (BtlGod_IsColorTable((f32 *)(e + i))) {
+            for (k = 0; k < 20; k++) {
+                Port_ModGodFxRecolorF((f32 *)(e + i) + k * 4, god);
+            }
+        }
+    }
+}
+
+/* EftTransform_Init (on = 1) / _Term (on = 0), eft_ab_b.c: effect kind `kind` (0..10) of the fighter `objId`. */
+void BtlGod_TransformColors(s32 objId, s32 kind, s32 on) {
+    static const s16 ids[11] = { 0x192, 0x1AA, 0x1AA, 0x1AA, 0x1AA, 0x1C0, 0x1C1, 0x1CB, 0x1E6, 0x1FC, 0x217 };
+    u8 *head;
+    u8 *first;
+    u8 *end;
+    s32 next;
+    s32 god;
+    s32 g;
+    s32 k;
+    u32 n;
+
+    if (sGodFxAt != NULL) {
+        for (n = 0; n < sGodFxSize; n++) {
+            if (sGodFxSave[n] != sGodFxMod[n] && sGodFxAt[n] == sGodFxMod[n]) {
+                sGodFxAt[n] = sGodFxSave[n];  /* a colour it changed, as it left it */
+            }
+        }
+        sGodFxAt = NULL;
+    }
+    if (!on || kind < 0 || kind > 10) {
+        return;
+    }
+    god = BtlCharApi_GodTarget(objId);
+    if (god == 0 || !Port_ModGodFxOn(god)) {
+        return;
+    }
+    head = (u8 *)BtlScene_GetCommonEntry(ids[kind]);
+    next = ids[kind] + 1;
+    for (g = 0; g < head[4]; g++) {  /* as EftEmit_LoadSet: each group's resources, then one or two per part */
+        u8 *def = head + 0x40 + g * 0x20;
+
+        if (def[0] != 0) {
+            next += def[2] + def[1] * (def[0] == 2 || def[0] == 14 ? 1 : 2);
+        }
+    }
+    first = (u8 *)BtlScene_GetCommonEntry(ids[kind] + 1);
+    end = (u8 *)BtlScene_GetCommonEntry(next);
+    if (end <= first || (u32)(end - first) > sizeof(sGodFxSave)) {
+        return;
+    }
+    sGodFxSize = (u32)(end - first);
+    for (n = 0; n < sGodFxSize; n++) {
+        sGodFxSave[n] = first[n];
+    }
+    sGodFxAt = first;
+    for (k = ids[kind] + 1; k < next; k++) {
+        u8 *e = (u8 *)BtlScene_GetCommonEntry(k);
+
+        BtlGod_FxEntry(e, (u32)((u8 *)BtlScene_GetCommonEntry(k + 1) - e), god);
+    }
+    for (n = 0; n < sGodFxSize; n++) {
+        sGodFxMod[n] = first[n];
+    }
+}
+
+/* {mark}: the hit spark sets (EftImpactMgr_Init, eft_v_b.c: common entries 0xC, 0x20, 0x25, 0x4C, 0x66, 0x73) in the
+   colour of the charge of the fighter starting one (eft_v_b.c: EftImpact_SpawnHit): Port_ModUiChargeHue, its god
+   form's or its aura type's hue (-1: the set's own colours). spark_charge_color 0 off, 1 the bursts of the attack
+   animations (kinds 15 / 16: the last set), 2 every set. A set is shared: recoloured when the colour changes, the
+   bytes it changed put back first (only where they still hold its colour). */
+#define BTL_SPARK_MAX 0x20000
+extern f32 Mathf_Sin(f32 angle);
+extern f32 Mathf_Cos(f32 angle);
+extern f32 atan2f(f32 y, f32 x);
+static const s16 sSparkHead[6] = { 0xC, 0x20, 0x25, 0x4C, 0x66, 0x73 };
+static u8 sSparkSave[6][BTL_SPARK_MAX];
+static u8 sSparkMod[6][BTL_SPARK_MAX];
+static u8 *sSparkAt[6];
+static u32 sSparkSize[6];
+static s32 sSparkHue[6];
+
+/* rgb (0..255) to the hue `h` (degrees), its saturation times `ss`, its brightness kept. */
+static void BtlGod_TintRgb(f32 *r, f32 *g, f32 *b, f32 h, f32 ss) {
+    f32 mx = *r > *g ? (*r > *b ? *r : *b) : (*g > *b ? *g : *b);
+    f32 mn = *r < *g ? (*r < *b ? *r : *b) : (*g < *b ? *g : *b);
+    f32 sat = mx > 0.0f ? (mx - mn) / mx : 0.0f;
+    f32 c;
+    f32 x;
+    f32 m;
+    f32 hh;
+    s32 i;
+
+    sat *= ss;
+    if (sat > 1.0f) {
+        sat = 1.0f;
+    }
+    c = mx * sat;
+    hh = h / 60.0f;
+    i = (s32)hh;
+    x = c * (1.0f - (hh - (f32)(i / 2 * 2) - 1.0f < 0.0f ? -(hh - (f32)(i / 2 * 2) - 1.0f) : hh - (f32)(i / 2 * 2) - 1.0f));
+    m = mx - c;
+    switch (i % 6) {
+    case 0: *r = c + m; *g = x + m; *b = m; break;
+    case 1: *r = x + m; *g = c + m; *b = m; break;
+    case 2: *r = m; *g = c + m; *b = x + m; break;
+    case 3: *r = m; *g = x + m; *b = c + m; break;
+    case 4: *r = x + m; *g = m; *b = c + m; break;
+    default: *r = c + m; *g = m; *b = x + m; break;
+    }
+}
+
+static f32 sTintHue;
+static f32 sTintSat;
+
+static void BtlGod_TintU8(u8 *p) {
+    f32 r = (f32)p[0];
+    f32 g = (f32)p[1];
+    f32 b = (f32)p[2];
+
+    BtlGod_TintRgb(&r, &g, &b, sTintHue, sTintSat);
+    p[0] = (u8)(r > 255.0f ? 255.0f : r);
+    p[1] = (u8)(g > 255.0f ? 255.0f : g);
+    p[2] = (u8)(b > 255.0f ? 255.0f : b);
+}
+
+static void BtlGod_TintF(f32 *p) {
+    BtlGod_TintRgb(&p[0], &p[1], &p[2], sTintHue, sTintSat);
+}
+
+/* The colour the fighter of side `side` charges in: the dominant hue (degrees) and saturation (0..1) of the particle
+   colours of the charge set it shows (Ultra Instinct's, its god form's, its own: as recoloured for it), Kaioken's red
+   in Kaioken. 0 when there are none. */
+static s32 BtlGod_ChargeTint(s32 side, BtlMgrChr *chr, f32 *hue, f32 *sat) {
+    s32 *pack = NULL;
+    s32 bits = *(s32 *)((u8 *)chr + 0xE10);
+    s32 god = (bits >> 12) & 7;
+    s32 bt4 = 0;  /* a set of BT4's: its colours are in its palettes (BT3's: in its particle colour tables) */
+    f32 sx = 0.0f;
+    f32 sy = 0.0f;
+    f32 ws = 0.0f;
+    f32 wt = 0.0f;
+    s32 j;
+
+    if (BtlChar_TestFlag(chr, 0x98) && Port_ModValue("kaioken_recolor", 1.0f) != 0.0f) {  /* Kaioken */
+        *hue = 355.0f;
+        *sat = 0.9f;
+        return 1;
+    }
+    /* v101: the settings where measuring fails (BT4's sets tint shared textures): a god form's, Ultra Instinct's,
+       the character's (power_levels.csv burst_hue) */
+    if (god >= 1 && god <= 6) {
+        static const char *const keys[7] = { "", "god_ssg_burst_hue", "god_ssgss_burst_hue", "god_rose_burst_hue",
+                                             "god_ssj4lb_burst_hue", "god_ultimate_burst_hue", "god_beast_burst_hue" };
+        static const f32 defs[7] = { -1.0f, 350.0f, 195.0f, 330.0f, 350.0f, 210.0f, 350.0f };
+        /* v108: how coloured, per form (0 white .. 1) */
+        static const char *const skeys[7] = { "", "god_ssg_burst_saturation", "god_ssgss_burst_saturation",
+                                              "god_rose_burst_saturation", "god_ssj4lb_burst_saturation",
+                                              "god_ultimate_burst_saturation", "god_beast_burst_saturation" };
+        static const f32 sdefs[7] = { 0.85f, 0.85f, 0.85f, 0.85f, 0.85f, 0.2f, 0.85f };
+        f32 h = Port_ModValue(keys[god], defs[god]);
+
+        if (h >= 0.0f) {
+            *hue = h;
+            *sat = Port_ModValue(skeys[god], sdefs[god]);
+            return 1;
+        }
+    }
+    if (BtlMember_HasAbility(chr, 0x7E)) {
+        f32 h = Port_ModValue("ultra_instinct_burst_hue", 210.0f);
+
+        if (h >= 0.0f) {
+            *hue = h;
+            *sat = Port_ModValue("ultra_instinct_burst_saturation", 0.3f);
+            return 1;
+        }
+    }
+    /* v109: a base form (no god form, not Ultra Instinct): its effects keep their own colours */
+    if ((god < 1 || god > 6) && !BtlMember_HasAbility(chr, 0x7E) && Port_ModValue("base_form_recolor", 0.0f) == 0.0f) {
+        return 0;
+    }
+    {
+        extern f32 Port_ModBurstHue(s32 chara);
+        extern f32 Port_ModBurstSat(s32 chara);
+        f32 h = Port_ModBurstHue(BtlMember_GetActive(chr)->chara);
+
+        if (h >= 0.0f) {
+            *hue = h;
+            *sat = Port_ModBurstSat(BtlMember_GetActive(chr)->chara);
+            return 1;
+        }
+    }
+    if (BtlMember_HasAbility(chr, 0x7E)) {
+        pack = (s32 *)Port_ModChargeSetPack(0, side);
+    }
+    if (pack == NULL && god >= 1 && god <= 6) {
+        pack = (s32 *)Port_ModChargeSetPack(god, side);
+    }
+    bt4 = pack != NULL;  /* (the sets beside the fighters' own come from BT4's fighters) */
+    if (pack == NULL) {
+        pack = BtlScene_GetCharPackEntry(side, 2);
+        bt4 = BtlMember_GetActive(chr)->chara >= 0xA5;  /* an added fighter's own: BT4's */
+    }
+    if (pack == NULL) {
+        return 0;
+    }
+    if (bt4) {
+        /* every palette of the set's texture files: hue weighted by saturation, brightness and alpha */
+        for (j = 1; j <= pack[0] && j < 256; j++) {
+            u32 a = (u32)pack[j] >> 2 << 2;
+            u32 b = (u32)pack[j + 1] >> 2 << 2;
+            u8 *tex = (u8 *)pack + a;
+            u32 cnt;
+            u32 eo;
+            s32 i;
+            s32 k;
+
+            if (b - a < 0x20) {
+                continue;
+            }
+            cnt = *(u32 *)tex;
+            eo = *(u32 *)(tex + 4);
+            if (cnt == 0 || cnt > 63 || eo * 4 + cnt * 0x40 > b - a) {
+                continue;
+            }
+            for (i = 0; i < (s32)cnt; i++) {
+                u32 co = *(u32 *)(tex + eo * 4 + i * 0x40 + 4);
+                s32 cs = *(s32 *)(tex + eo * 4 + i * 0x40 + 0xC);
+                s32 colors;
+
+                if (co == 0 || cs <= 0x60 || co * 4 + (u32)cs > b - a) {
+                    continue;
+                }
+                colors = (cs - 0x60) / 4 >= 256 ? 256 : 16;
+                for (k = 0; k < colors; k++) {
+                    u8 *c = tex + co * 4 + 0x60 + k * 4;
+                    f32 r = (f32)c[0];
+                    f32 g = (f32)c[1];
+                    f32 bl = (f32)c[2];
+                    f32 al = (f32)c[3] / 128.0f;
+                    f32 mx = r > g ? (r > bl ? r : bl) : (g > bl ? g : bl);
+                    f32 mn = r < g ? (r < bl ? r : bl) : (g < bl ? g : bl);
+                    f32 d = mx - mn;
+                    f32 h;
+                    f32 sa;
+
+                    if (mx < 8.0f) {
+                        continue;
+                    }
+                    sa = d / mx;
+                    wt += mx * al;
+                    ws += sa * mx * al;
+                    if (d <= 0.0f) {
+                        continue;
+                    }
+                    if (mx == r) {
+                        h = 60.0f * ((g - bl) / d);
+                    } else if (mx == g) {
+                        h = 60.0f * ((bl - r) / d + 2.0f);
+                    } else {
+                        h = 60.0f * ((r - g) / d + 4.0f);
+                    }
+                    h *= 3.14159265f / 180.0f;
+                    sx += Mathf_Cos(h) * sa * mx * al;
+                    sy += Mathf_Sin(h) * sa * mx * al;
+                }
+            }
+        }
+    }
+    for (j = 1; !bt4 && j <= pack[0] && j < 256; j++) {
+        u32 a = (u32)pack[j] >> 2 << 2;
+        u32 b = (u32)pack[j + 1] >> 2 << 2;
+        s32 q;
+
+        if (b - a != 320 || !BtlGod_IsColorTable((f32 *)((u8 *)pack + a))) {
+            continue;
+        }
+        for (q = 0; q < 20; q++) {
+            f32 *c = (f32 *)((u8 *)pack + a) + q * 4;
+            f32 mx = c[0] > c[1] ? (c[0] > c[2] ? c[0] : c[2]) : (c[1] > c[2] ? c[1] : c[2]);
+            f32 mn = c[0] < c[1] ? (c[0] < c[2] ? c[0] : c[2]) : (c[1] < c[2] ? c[1] : c[2]);
+            f32 d = mx - mn;
+            f32 h;
+            f32 s;
+
+            if (mx <= 1.0f) {
+                continue;
+            }
+            s = d / mx;
+            wt += mx;
+            ws += s * mx;
+            if (d <= 0.0f) {
+                continue;
+            }
+            if (mx == c[0]) {
+                h = 60.0f * ((c[1] - c[2]) / d);
+            } else if (mx == c[1]) {
+                h = 60.0f * ((c[2] - c[0]) / d + 2.0f);
+            } else {
+                h = 60.0f * ((c[0] - c[1]) / d + 4.0f);
+            }
+            h *= 3.14159265f / 180.0f;
+            sx += Mathf_Cos(h) * s * mx;
+            sy += Mathf_Sin(h) * s * mx;
+        }
+    }
+    if (wt <= 0.0f) {
+        return 0;
+    }
+    *sat = ws / wt;
+    *hue = (sx == 0.0f && sy == 0.0f) ? 0.0f : atan2f(sy, sx) * 180.0f / 3.14159265f;
+    if (*hue < 0.0f) {
+        *hue += 360.0f;
+    }
+    Port_ModGodLog("spark-charge", side, bt4 + 2 * god, (s32)*hue, (s32)(*sat * 100.0f));  /* (debug_god_fx) */
+    return 1;
+}
+
+static void BtlGod_HueEntry(u8 *e, u32 size, s32 code) {
+    u32 cnt;
+    u32 eo;
+    s32 i;
+    s32 k;
+
+    if (size >= 0x20) {
+        cnt = *(u32 *)e;
+        eo = *(u32 *)(e + 4);
+        if (cnt != 0 && cnt <= 63 && eo * 4 + cnt * 0x40 <= size) {  /* a texture file: every palette */
+            for (i = 0; i < (s32)cnt; i++) {
+                u32 co = *(u32 *)(e + eo * 4 + i * 0x40 + 4);
+                s32 cs = *(s32 *)(e + eo * 4 + i * 0x40 + 0xC);
+                s32 colors;
+
+                if (co == 0 || cs <= 0x60 || co * 4 + (u32)cs > size) {
+                    continue;
+                }
+                colors = (cs - 0x60) / 4 >= 256 ? 256 : 16;
+                for (k = 0; k < colors; k++) {
+                    BtlGod_TintU8(e + co * 4 + 0x60 + k * 4);
+                }
+            }
+            return;
+        }
+    }
+    for (i = 0; i + 320 <= (s32)size && size % 320 == 0; i += 320) {  /* particle colour tables */
+        if (BtlGod_IsColorTable((f32 *)(e + i))) {
+            for (k = 0; k < 20; k++) {
+                BtlGod_TintF((f32 *)(e + i) + k * 4);
+            }
+        }
+    }
+    (void)code;
+}
+
+void BtlGod_SparkColors(s32 objId, s32 kind) {
+    s32 mode = (s32)Port_ModValue("spark_charge_color", 2.0f);
+    BtlMgrChr *chr = NULL;
+    s32 set;
+    s32 hue;
+    s32 god;
+    s32 bits;
+    s32 side;
+    s32 next;
+    s32 g;
+    s32 k;
+    u8 *head;
+    u8 *first;
+    u8 *end;
+    u32 n;
+
+    set = kind <= 3 ? 0 : kind <= 6 ? 1 : kind <= 10 ? 2 : kind <= 13 ? 3 : kind == 14 ? 4 : kind <= 16 ? 5 : -1;
+    {
+        BtlMgrChr *c0 = BtlChar_Get(0);
+
+        /* v106: which spark, whose (debug_god_fx) */
+        Port_ModGodLog("spark-spawn", c0 != NULL && *(s32 *)((u8 *)c0 + 0xC) == objId ? 0 : 1, kind, set, mode);
+    }
+    if (mode == 0 || set < 0 || (mode == 1 && set != 5)) {
+        return;
+    }
+    for (side = 0; side < 2; side++) {
+        BtlMgrChr *c = BtlChar_Get(side);
+
+        if (c != NULL && *(s32 *)((u8 *)c + 0xC) == objId) {  /* (+0xC: the fighter's object) */
+            chr = c;
+            break;
+        }
+    }
+    hue = -1;
+    if (chr != NULL) {
+        f32 h;
+        f32 sa;
+
+        (void)bits;
+        (void)god;
+        if (BtlGod_ChargeTint(side, chr, &h, &sa)) {
+            /* the key of a colour: the hue (degrees) and the saturation scale (the charge's over 0.5, up to 1) */
+            sTintHue = (f32)((s32)(h + 0.5f) % 360);
+            sTintSat = sa / 0.5f > 1.0f ? 1.0f : sa / 0.5f;
+            hue = (s32)sTintHue * 100 + (s32)(sTintSat * 99.0f);
+        }
+    }
+    head = (u8 *)BtlScene_GetCommonEntry(sSparkHead[set]);
+    first = (u8 *)BtlScene_GetCommonEntry(sSparkHead[set] + 1);
+    if (sSparkAt[set] != NULL && sSparkAt[set] != first) {
+        sSparkAt[set] = NULL;  /* another battle's data: nothing to put back */
+    }
+    if (sSparkAt[set] != NULL && sSparkHue[set] == hue) {
+        return;  /* already in that colour */
+    }
+    if (sSparkAt[set] != NULL) {
+        u8 *at = sSparkAt[set];
+
+        for (n = 0; n < sSparkSize[set]; n++) {
+            if (sSparkSave[set][n] != sSparkMod[set][n] && at[n] == sSparkMod[set][n]) {
+                at[n] = sSparkSave[set][n];  /* a colour it changed, as it left it */
+            }
+        }
+        sSparkAt[set] = NULL;
+    }
+    if (hue < 0 || head == NULL || first == NULL) {
+        return;  /* its own colours */
+    }
+    next = sSparkHead[set] + 1;
+    for (g = 0; g < head[4]; g++) {  /* as EftEmit_LoadSet: each group's resources, then one or two per part */
+        u8 *def = head + 0x40 + g * 0x20;
+
+        if (def[0] != 0) {
+            next += def[2] + def[1] * (def[0] == 2 || def[0] == 14 ? 1 : 2);
+        }
+    }
+    end = (u8 *)BtlScene_GetCommonEntry(next);
+    if (end <= first || (u32)(end - first) > BTL_SPARK_MAX) {
+        return;
+    }
+    sSparkSize[set] = (u32)(end - first);
+    for (n = 0; n < sSparkSize[set]; n++) {
+        sSparkSave[set][n] = first[n];
+    }
+    for (k = sSparkHead[set] + 1; k < next; k++) {
+        u8 *e = (u8 *)BtlScene_GetCommonEntry(k);
+
+        BtlGod_HueEntry(e, (u32)((u8 *)BtlScene_GetCommonEntry(k + 1) - e), 0);
+    }
+    for (n = 0; n < sSparkSize[set]; n++) {
+        sSparkMod[set][n] = first[n];
+    }
+    sSparkAt[set] = first;
+    sSparkHue[set] = hue;
+}
+
+/* {mark}: the fighters' ki blasts (character pack entries 3 and 4: the ki blast sets, the Kiai Cannon's too) in the
+   colour of their charge (BtlGod_ChargeTint), looked at every 10 frames (kiblast_charge_color 0: their own colours).
+   Only colour bytes are written, each from a copy of the set as it was first seen (the game writes pointers into
+   these sets while they play). */
+#define BTL_KIBLAST_MAX 0x80000
+/* v107: the ki blasts (entries 3, 4) and the rush ki wave (entry 7: the rush finisher's burst, EftRushBurst) */
+static const s32 sKbEntry[3] = { 3, 4, 7 };
+static u8 sKbOrig[2][3][BTL_KIBLAST_MAX];
+static s32 *sKbAt[2][3];
+static u32 sKbSize[2][3];
+static s32 sKbKey[2][3];
+static s32 sKbTimer[2];
+
+/* Every palette and particle colour table of the sub-pack `pack` (size bytes): from `orig`, tinted when `tint`. */
+static void BtlGod_TintSubPack(s32 *pack, const u8 *orig, u32 size, s32 tint) {
+    s32 j;
+
+    for (j = 1; j <= pack[0] && j < 256; j++) {
+        u32 a = (u32)pack[j] >> 2 << 2;
+        u32 b = (u32)pack[j + 1] >> 2 << 2;
+        u8 *tex = (u8 *)pack + a;
+        u32 cnt;
+        u32 eo;
+        s32 i;
+        s32 k;
+
+        if (b > size || b <= a) {
+            continue;
+        }
+        if (b - a == 320 && BtlGod_IsColorTable((f32 *)tex)) {
+            for (k = 0; k < 20; k++) {
+                u32 at = a + (u32)k * 16;
+                s32 c;
+
+                for (c = 0; c < 12; c++) {
+                    ((u8 *)pack)[at + c] = orig[at + c];
+                }
+                if (tint) {
+                    BtlGod_TintF((f32 *)((u8 *)pack + at));
+                }
+            }
+            continue;
+        }
+        if (b - a < 0x20) {
+            continue;
+        }
+        cnt = *(u32 *)tex;
+        eo = *(u32 *)(tex + 4);
+        if (cnt == 0 || cnt > 63 || eo * 4 + cnt * 0x40 > b - a) {
+            continue;
+        }
+        for (i = 0; i < (s32)cnt; i++) {
+            u32 co = *(u32 *)(tex + eo * 4 + i * 0x40 + 4);
+            s32 cs = *(s32 *)(tex + eo * 4 + i * 0x40 + 0xC);
+            s32 colors;
+
+            if (co == 0 || cs <= 0x60 || co * 4 + (u32)cs > b - a) {
+                continue;
+            }
+            colors = (cs - 0x60) / 4 >= 256 ? 256 : 16;
+            for (k = 0; k < colors; k++) {
+                u32 at = a + co * 4 + 0x60 + (u32)k * 4;
+
+                ((u8 *)pack)[at] = orig[at];
+                ((u8 *)pack)[at + 1] = orig[at + 1];
+                ((u8 *)pack)[at + 2] = orig[at + 2];
+                if (tint) {
+                    BtlGod_TintU8((u8 *)pack + at);
+                }
+            }
+        }
+    }
+}
+
+void BtlGod_KiBlastColors(s32 side) {
+    BtlMgrChr *chr;
+    s32 key = -1;
+    s32 e;
+
+    side &= 1;
+    if (++sKbTimer[side] < 10) {
+        return;
+    }
+    sKbTimer[side] = 0;
+    chr = BtlChar_Get(side);
+    if (chr == NULL) {
+        return;
+    }
+    if (Port_ModValue("kiblast_charge_color", 1.0f) != 0.0f) {
+        f32 h;
+        f32 sa;
+
+        if (BtlGod_ChargeTint(side, chr, &h, &sa)) {
+            sTintHue = (f32)((s32)(h + 0.5f) % 360);
+            sTintSat = sa / 0.5f > 1.0f ? 1.0f : sa / 0.5f;
+            key = (s32)sTintHue * 100 + (s32)(sTintSat * 99.0f);
+        }
+    }
+    for (e = 0; e < 3; e++) {
+        s32 *pack = BtlScene_GetCharPackEntry(side, sKbEntry[e]);
+        s32 *next = BtlScene_GetCharPackEntry(side, sKbEntry[e] + 1);
+        u32 size;
+        u32 n;
+
+        if (pack == NULL || next == NULL || next <= pack) {
+            continue;
+        }
+        size = (u32)((u8 *)next - (u8 *)pack);
+        if (size < 16 || size > BTL_KIBLAST_MAX || pack[0] <= 0 || pack[0] > 255) {
+            if (sKbKey[side][e] != -2) {
+                Port_ModGodLog("kb-skip", side, sKbEntry[e], (s32)size, pack[0]);
+                sKbKey[side][e] = -2;
+            }
+            continue;
+        }
+        if (sKbAt[side][e] != pack || sKbSize[side][e] != size) {
+            for (n = 0; n < size; n++) {  /* a set not seen before (a new battle, a new form): its own colours */
+                sKbOrig[side][e][n] = ((u8 *)pack)[n];
+            }
+            sKbAt[side][e] = pack;
+            sKbSize[side][e] = size;
+            sKbKey[side][e] = -1;
+        }
+        if (sKbKey[side][e] == key) {
+            continue;
+        }
+        if (key >= 0) {
+            BtlGod_TintSubPack(pack, sKbOrig[side][e], size, 1);
+        } else {
+            BtlGod_TintSubPack(pack, sKbOrig[side][e], size, 0);
+        }
+        Port_ModGodLog("kb-tint", side, sKbEntry[e], key, (s32)size);  /* (debug_god_fx) */
+        sKbKey[side][e] = key;
+    }
+}
+
+/* Whether 320 bytes are 20 particle colours: red, green and blue 0 or 0.001..255.5, a finite fourth value. */
+static s32 BtlGod_IsColorTable(f32 *t) {
+    s32 q;
+    s32 k;
+
+    for (q = 0; q < 20; q++) {
+        for (k = 0; k < 3; k++) {
+            f32 v = t[q * 4 + k];
+
+            if (!(v == 0.0f || (v >= 0.001f && v <= 255.5f))) {
+                return 0;
+            }
+        }
+        if (!(t[q * 4 + 3] >= -100000.0f && t[q * 4 + 3] <= 100000.0f)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+#endif
+
 /* Applies the form change of the current action once the new model is loaded. */
 void BtlChar_OnModelLoaded(BtlMgrChr *chr) {
     BtlMgrObj *obj;
@@ -367,12 +1289,24 @@ void BtlChar_OnModelLoaded(BtlMgrChr *chr) {
     f32 ratio;
     s32 i;
 
+#ifdef PORT
+    sBtlGodKeep = *(s32 *)((u8 *)chr + 0xE10) & 0x77000;  /* the bind clears 0xE00..0xE40 */
+#endif
     BtlChar_BindObject(chr);
     obj = BtlChar_GetObj(chr);
     BtlChar_SetFlag(chr, 0x12B);
+#ifdef PORT
+    *(s32 *)((u8 *)chr + 0xE10) |= sBtlGodKeep;  /* Mod "Ultra Instinct" v115: the god bits, cleared by the bind */
+    BtlAct_EndFlag98(chr);  /* Kaioken ends with a new form or member */
+#endif
     BtlAnim_FlushRequest(chr);
     BtlObjAnim_SamplePose(obj);
     BtlChar_PoseToObj(chr, 1);
+#ifdef PORT
+    if ((u32)(BtlAct_GetCurrent(chr) - 0xEC) > 4) {
+        *(s32 *)((u8 *)chr + 0xE10) &= ~0x77000;  /* Mod "Ultra Instinct" v115: no god form */
+    }
+#endif
     BtlObjPose_CalcMatrices(obj);
     switch (BtlAct_GetCurrent(chr)) {
     case 0xEC:
@@ -382,6 +1316,13 @@ void BtlChar_OnModelLoaded(BtlMgrChr *chr) {
     case 0xF0:
         /* transformation: keep the health ratio */
         m = BtlMember_GetActive(chr);
+#ifdef PORT
+        {
+            extern s32 BtlMember_TransformBegin(BtlMgrChr *chr, s32 from, s32 to);
+
+            i = BtlMember_TransformBegin(chr, m->chara, chr->newChara);  /* Mod "Ultra Instinct" v115: 1 = up */
+        }
+#endif
         m->chara = chr->newChara;
         g = &m->gauge;
         m->costume = chr->newCostume;
@@ -400,6 +1341,21 @@ void BtlChar_OnModelLoaded(BtlMgrChr *chr) {
         }
         g->health = BtlUtil_Clamp(g->health, 1, g->healthMax);
         g->blast = BtlUtil_Clamp(g->blast, 0, g->blastMax);
+#ifdef PORT
+        {
+            extern s32 BtlAct_GodTakePending(BtlMgrChr *chr);
+            s32 god = BtlAct_GodTakePending(chr);  /* Mod "Ultra Instinct" v115 */
+
+            if (god) {
+                BtlGod_RecolorModel(chr, god, m->chara, m->costume + (g->unk20 ? 4 : 0));
+            }
+        }
+        if (i) {
+            extern void BtlMember_TransformHealAll(BtlMgrChr *chr);
+
+            BtlMember_TransformHealAll(chr);
+        }
+#endif
         break;
     case 0xF3:
     case 0xF4:
@@ -447,7 +1403,16 @@ void BtlChar_OnModelLoaded(BtlMgrChr *chr) {
             }
             g->health += og->health;
             g->healthMax += og->healthMax;
+#ifdef PORT
+            {
+                extern f32 Port_ModValue(const char *key, f32 def);
+                s32 stocks = (s32)Port_ModValue("stamina_stocks", 7.0f);  /* Mod "Ultra Instinct" v115: the same for everyone */
+
+                g->blastMax = (stocks > 0 ? (stocks > 7 ? 7 : stocks) : gBtlChars->tbl[4][m->chara * 4 + 3]) * 100000;
+            }
+#else
             g->blastMax = gBtlChars->tbl[4][m->chara * 4 + 3] * 100000;
+#endif
             if (BtlParam_GetUnkAD(chr) & 1) {
                 g->health += 5000;
             }

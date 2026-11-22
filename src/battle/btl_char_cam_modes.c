@@ -152,7 +152,15 @@ void ChrCam_CalcLockOn(ChrCamChr *chr, Vec4 *eye, Vec4 *rot, Vec4 *target) {
 
     scale = BtlCharApi_GetHeight(chr->objId);
     Vec4_Copy(&pos, &BtlChar_GetPos(chr)->pos);
+#ifdef PORT
+    {
+        extern f32 BtlStage_GetHoldBottom(void);  /* Mod "Ultra Instinct" v115: no bottom barrier */
+
+        floorY = BtlStage_GetHoldBottom() + scale * 0.5f;
+    }
+#else
     floorY = BtlStage_GetBottom() + scale * 0.5f;
+#endif
     if (floorY < pos.y) {
         pos.y = floorY;
     }

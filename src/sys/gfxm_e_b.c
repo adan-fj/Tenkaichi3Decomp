@@ -168,6 +168,13 @@ void BtlObjMdl_BindFiles(ObjMdlObj *obj) {
     void *res = obj->res;
     s32 i;
 
+#ifdef PORT
+    {
+        extern void Port_ModLoadLog(const char *what, u32 a, u32 b, u32 c, u32 d);
+
+        Port_ModLoadLog("bind", (u32)mdl->file, (u32)mdl->file->meshOfs, (u32)mdl->file->bound, (u32)mdl->texFile);  /* Mod "Ultra Instinct" v115 */
+    }
+#endif
     mdl->model = mdl->file;
     mdl->meshes = (ObjMdlMesh *)((u8 *)mdl->file + mdl->file->meshOfs);
     if (!mdl->file->bound) {
